@@ -677,17 +677,39 @@ let activeFilter=null;
 /* ── VISIBILIDADE DA PÁGINA ── */
 /* Pausa atualizações automáticas quando o app vai para segundo plano */
 let pageVisible = !document.hidden;
+let _bgTs = 0;       // quando foi para segundo plano
+let _lastTick = Date.now(); // último tick do countdown — detecta interval morto
+
 document.addEventListener('visibilitychange', () => {
   pageVisible = !document.hidden;
-  if (pageVisible) {
-    // Voltou ao primeiro plano: se contador já zerou, atualiza imediatamente
-    if (cd <= 0) { load(); }
-    else { startCd(); } // retoma countdown do ponto atual
+  if(pageVisible){
+    const bgTime = Date.now() - _bgTs;
+    // Ficou mais de 30s em segundo plano → atualiza imediatamente
+    if(bgTime > 30000 || cd <= 0){
+      clearInterval(cdInt);
+      load();
+    } else {
+      // Retoma de onde parou sem resetar cd
+      clearInterval(cdInt);
+      cdInt = setInterval(_cdTick, 1000);
+    }
   } else {
-    // Foi para segundo plano: suspende o interval
+    _bgTs = Date.now();
     clearInterval(cdInt);
   }
 });
+
+/* Watchdog: a cada 5s verifica se o countdown ainda está rodando.
+   No iOS/Android o setInterval pode congelar sem disparar visibilitychange.
+   Se o último tick foi há mais de 10s e a página está visível → reinicia. */
+setInterval(()=>{
+  if(pageVisible && (Date.now() - _lastTick) > 10000){
+    console.log('[UniTrack] Watchdog: countdown congelado, reiniciando...');
+    clearInterval(cdInt);
+    if(cd <= 0) load();
+    else cdInt = setInterval(_cdTick, 1000);
+  }
+}, 5000);
 
 /* ── CACHE DE LINHAS ── */
 /* A API de linhas muda raramente; cache de 5 min evita chamadas desnecessárias */
@@ -787,16 +809,21 @@ function tick(){
 setInterval(tick,1000);tick();
 
 /* ── COUNTDOWN ── */
+function _cdTick(){
+  if(!pageVisible) return;
+  _lastTick = Date.now(); // atualiza watchdog
+  cd--;
+  const s=cd%60, m=Math.floor(cd/60);
+  document.getElementById('cdLbl').textContent=m>0?(m+':'+(s<10?'0':'')+s):(s+'s');
+  document.getElementById('rfp').style.width=((cd/RSEC)*100)+'%';
+  if(cd<=0){ clearInterval(cdInt); load(); }
+}
+
 function startCd(){
-  clearInterval(cdInt);cd=RSEC;
-  cdInt=setInterval(()=>{
-    if(!pageVisible) return; // app em segundo plano — não decrementa
-    cd--;
-    const s=cd%60,m=Math.floor(cd/60);
-    document.getElementById('cdLbl').textContent=m>0?(m+':'+(s<10?'0':'')+s):(s+'s');
-    document.getElementById('rfp').style.width=((cd/RSEC)*100)+'%';
-    if(cd<=0){clearInterval(cdInt);load();}
-  },1000);
+  clearInterval(cdInt);
+  cd=RSEC;
+  _lastTick=Date.now();
+  cdInt=setInterval(_cdTick, 1000);
 }
 
 /* ══════════════════════════════════════════════════════
@@ -910,9 +937,9 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
       lng=_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*t;
     }
     mk.setLatLng([lat,lng]);
-    if(activeV) updateTrail(lat,lng);
+      if(activeV) updateTrail(lat,lng);
     if(t>=1) stopInterp();
-  },100);
+  },500); // 2fps para o rastro — suficiente no mobile
 }
 
 /* ══════════════════════════════════════════════════════
@@ -959,6 +986,13 @@ function startTrail(fromLat, fromLng){
 /* Adiciona ponto à linha viva — chamado a cada tick da animação */
 function updateTrail(lat, lng){
   if(!_trailLine) return;
+  // Só adiciona ponto se moveu pelo menos 5m do último ponto do rastro
+  // Evita pontos redundantes que pesam no mobile
+  const last=_trailPts[_trailPts.length-1];
+  if(last){
+    const dlat=Math.abs(lat-last[0]), dlng=Math.abs(lng-last[1]);
+    if(dlat<0.00005 && dlng<0.00005) return; // ~5m — ignora
+  }
   _trailPts.push([lat, lng]);
   _trailLine.setLatLngs(_trailPts);
 }
