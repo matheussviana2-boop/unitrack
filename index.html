@@ -100,6 +100,8 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
 .ac-clear.show{display:block;}
 .ac-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:99999;background:var(--navy2);border:1px solid var(--border2);border-radius:8px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.7);display:none;max-height:220px;overflow-y:auto;animation:dropIn 0.15s ease;}
 .ac-dropdown.open{display:block;}
+/* Mobile: position:fixed para escapar do overflow:hidden da sidebar */
+.ac-dropdown.fixed-drop{position:fixed!important;left:0!important;right:auto!important;top:auto!important;}
 .ac-dropdown::-webkit-scrollbar{width:3px;}
 .ac-dropdown::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
 .ac-item{padding:9px 12px;font-size:12px;font-weight:500;color:var(--text);cursor:pointer;transition:background 0.1s;border-bottom:1px solid rgba(255,255,255,0.04);display:flex;align-items:center;gap:8px;}
@@ -903,26 +905,27 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   const ctrl=new AbortController();
   const tid=setTimeout(()=>ctrl.abort(),3000);
 
-  if(dist>=0.1) fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
+  if(dist>=0.2) fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
     .then(r=>r.json())
     .then(data=>{
       clearTimeout(tid);
       const coords=data?.routes?.[0]?.geometry?.coordinates;
       if(coords && coords.length>=2){
-        // OSRM retorna [lng,lat] — converte para {lat,lng}
-        _routePts=coords.map(c=>({lat:c[1],lng:c[0]}));
-        // Calcula distâncias acumuladas para interpolação fiel
-        _routeDists=[0];
-        for(let i=1;i<_routePts.length;i++){
-          _routeDists.push(_routeDists[i-1]+
-            _haversineKm(_routePts[i-1].lat,_routePts[i-1].lng,
-                         _routePts[i].lat,_routePts[i].lng));
+        const pts=coords.map(c=>({lat:c[1],lng:c[0]}));
+        let rd=[0];
+        for(let i=1;i<pts.length;i++){
+          rd.push(rd[i-1]+_haversineKm(pts[i-1].lat,pts[i-1].lng,pts[i].lat,pts[i].lng));
         }
-        _routeTotal=_routeDists[_routeDists.length-1];
-        console.log('[OSRM] ok',_routePts.length,'pts');
+        const rLen=rd[rd.length-1];
+        if(rLen<=dist*4){
+          _routePts=pts;_routeDists=rd;_routeTotal=rLen;
+          console.log('[OSRM] ok',pts.length,'pts',rLen.toFixed(2)+'km');
+        } else {
+          console.warn('[OSRM] rejeitado:',rLen.toFixed(2)+'km vs',dist.toFixed(2)+'km');
+        }
       }
     })
-    .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e?.message||e); });
+    .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e?.message); });
 
   // Inicia linha viva imediatamente (vai sendo atualizada com os pontos da rota)
   if(activeV) startTrail(fromLat, fromLng);
@@ -957,9 +960,6 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
 /* Remove tudo do rastro do mapa */
 function clearTrail(){
   if(trailLayer) trailLayer.clearLayers();
-  if(_trailRenderer && mapL){
-    // Garante que o SVG renderer está limpo
-  }
   _trailLine=null;
   _trailLines=[];
   _trailPts=[];
@@ -989,11 +989,10 @@ function startTrail(fromLat, fromLng){
     pane:'trailPane',
     renderer:_trailRenderer
   };
-  // Limpa TODO rastro existente antes de iniciar novo
-  if(trailLayer) trailLayer.clearLayers();
-  _trailLine=null;
+  // Remove linha anterior completamente — só mantém rastro atual
+  if(_trailLine){ trailLayer.removeLayer(_trailLine); _trailLine=null; }
+  _trailLines.forEach(l=>trailLayer.removeLayer(l));
   _trailLines=[];
-  _trailPts=[];
   // Nova linha viva com estilo mais sutil
   _trailPts=[[fromLat, fromLng]];
   _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
@@ -1012,13 +1011,13 @@ function updateTrail(lat, lng){
   // Reconstrói polyline completamente — mais confiável no mobile/WebKit
   // que chamar setLatLngs numa instância existente
   const opts={
-    color:'#00e676', weight:6,
+    color:'#00e676', weight:3,
     lineCap:'round', lineJoin:'round',
     pane:'trailPane',
     renderer:_trailRenderer
   };
   trailLayer.removeLayer(_trailLine);
-  _trailLine=L.polyline([..._trailPts], {...opts, opacity:1.0}).addTo(trailLayer);
+  _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
 }
 
 /* drawTrail: compatibilidade — chamado ao selecionar veículo
@@ -1231,11 +1230,28 @@ function acFilter(){
   acRender();
 }
 function acOpen(){acRender();}
+/* Abre o dropdown posicionando com fixed no mobile para escapar do overflow:hidden */
+function _acDropOpen(drop){
+  drop.classList.add('open');
+  if(isMobile()){
+    const input=document.getElementById('acInput');
+    const rect=input.getBoundingClientRect();
+    drop.classList.add('fixed-drop');
+    drop.style.top=(rect.bottom+4)+'px';
+    drop.style.left=rect.left+'px';
+    drop.style.width=rect.width+'px';
+    drop.style.maxHeight='45vh';
+  }
+}
 function acRender(){
   const q=searchQ;
   const drop=document.getElementById('acDrop');
   drop.innerHTML='';
-  if(!q){drop.classList.remove('open');return;}
+  if(!q){
+    drop.classList.remove('open');
+    drop.classList.remove('fixed-drop');
+    return;
+  }
   const frotaHits=[...new Set(allV.filter(v=>v.frota.toLowerCase().includes(q)).map(v=>v.frota))].slice(0,8);
   const motoHits=[...new Set(allV.filter(v=>v.motorista.toLowerCase().includes(q)&&v.motorista!=='—').map(v=>v.motorista))].slice(0,6);
   // Linhas únicas que batem com a busca
@@ -1247,7 +1263,7 @@ function acRender(){
 
   if(!frotaHits.length&&!motoHits.length&&!linhaHits.length){
     drop.innerHTML='<div class="ac-empty">Nenhum resultado</div>';
-    drop.classList.add('open');return;
+    _acDropOpen(drop);return;
   }
   if(frotaHits.length){
     const g=document.createElement('div');g.className='ac-group-label';g.textContent='VEÍCULOS';drop.appendChild(g);
@@ -1280,11 +1296,14 @@ function acRender(){
       drop.appendChild(d);
     });
   }
-  drop.classList.add('open');
+  _acDropOpen(drop);
 }
 function acSelect(val,type){
   document.getElementById('acInput').value=val;
-  document.getElementById('acDrop').classList.remove('open');
+  const _d=document.getElementById('acDrop');
+  _d.classList.remove('open');
+  _d.classList.remove('fixed-drop');
+  _d.style.cssText='';
   document.getElementById('acClear').classList.add('show');
   searchQ=val.toLowerCase();
   renderList();
@@ -1302,7 +1321,10 @@ function acSelect(val,type){
 }
 function acClear(){
   document.getElementById('acInput').value='';
-  document.getElementById('acDrop').classList.remove('open');
+  const _dd=document.getElementById('acDrop');
+  _dd.classList.remove('open');
+  _dd.classList.remove('fixed-drop');
+  _dd.style.cssText='';
   document.getElementById('acClear').classList.remove('show');
   searchQ='';selIdx=-1;
   renderList();clearSelection();
@@ -1333,7 +1355,9 @@ function renderMkrs(highlightId=null){
     if(vSel){
       const st=getStatus(vSel);const color=ST_COLOR[st];
       const icon=busMapIcon(color,true,false);
-      const m=L.marker([vSel.lat,vSel.lng],{icon,zIndexOffset:1000});
+      const curLat=(_interpFrom&&_interpTo)?_interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*Math.min((Date.now()-_interpT0)/_interpDur,1):vSel.lat;
+      const curLng=(_interpFrom&&_interpTo)?_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*Math.min((Date.now()-_interpT0)/_interpDur,1):vSel.lng;
+      const m=L.marker([curLat,curLng],{icon,zIndexOffset:1000});
       m.on('click',()=>selectVehicle(vSel,true));
       singleLayer.addLayer(m);mkrs[vSel.id]=m;
     }
