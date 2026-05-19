@@ -20,7 +20,7 @@ self.addEventListener('message', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // NUNCA cachear — sempre vai à rede
+  // NUNCA cachear — sempre vai direto à rede
   const isNoCache =
     url.pathname.startsWith('/api/') ||
     url.pathname.includes('/posicao') ||
@@ -29,8 +29,8 @@ self.addEventListener('fetch', event => {
     url.href.includes('brasilsat') ||
     url.href.includes('nominatim') ||
     url.href.includes('arcgis') ||
-    url.href.includes('osrm') ||           // roteamento OSRM — nunca cachear
-    url.href.includes('project-osrm');     // fallback para o domínio completo
+    url.href.includes('osrm') ||
+    url.href.includes('project-osrm');
 
   if(isNoCache){
     event.respondWith(
