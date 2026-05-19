@@ -645,6 +645,7 @@ const API2 =_needProxy?_PROXY+encodeURIComponent(_API2_BASE):_API2_BASE;
 function apiUrl(base){ return base+'?_='+Date.now(); }
 const RSEC=60;
 let mapL,cluster,singleLayer,layerStreet,layerSat,currentLayer='street';
+let trailLayer=null; // layerGroup dedicado ao rastro — z-index fixo acima dos tiles
 let allV=[],filt=[],mkrs={},cdInt=null,cd=RSEC,activeV=null,searchQ='',selIdx=-1;
 /* ── INTERPOLAÇÃO ── */
 let _interpInt=null;    // setInterval da animação
@@ -953,8 +954,9 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
 
 /* Remove tudo do rastro do mapa */
 function clearTrail(){
-  if(_trailLine){ mapL.removeLayer(_trailLine); _trailLine=null; }
-  _trailLines.forEach(l=>{ if(mapL) mapL.removeLayer(l); });
+  if(!trailLayer) return;
+  trailLayer.clearLayers();
+  _trailLine=null;
   _trailLines=[];
   _trailPts=[];
 }
@@ -962,25 +964,22 @@ function clearTrail(){
 /* Inicia nova linha viva do ponto fromLat/Lng
    Chamado no início de cada animação */
 function startTrail(fromLat, fromLng){
-  // Congela a linha anterior como segmento estático
+  if(!trailLayer) return;
+  const opts={color:'#00e676', weight:5, lineCap:'round', lineJoin:'round', pane:'trailPane'};
+  // Congela a linha anterior como segmento estático com opacidade baixa
   if(_trailLine){
-    mapL.removeLayer(_trailLine);
-    // Recria como estática com opacidade baixa
-    const frozen=L.polyline(_trailPts,
-      {color:'#00e676', weight:5, opacity:0.35, lineCap:'round', lineJoin:'round'}
-    ).addTo(mapL);
+    trailLayer.removeLayer(_trailLine);
+    const frozen=L.polyline(_trailPts, {...opts, opacity:0.35}).addTo(trailLayer);
     _trailLines.push(frozen);
-    // Mantém só 1 segmento estático (última transmissão)
+    // Mantém só 1 segmento estático
     if(_trailLines.length>1){
-      mapL.removeLayer(_trailLines[0]);
+      trailLayer.removeLayer(_trailLines[0]);
       _trailLines.shift();
     }
   }
-  // Nova linha viva começando no ponto de partida
+  // Nova linha viva
   _trailPts=[[fromLat, fromLng]];
-  _trailLine=L.polyline(_trailPts,
-    {color:'#00e676', weight:5, opacity:1.0, lineCap:'round', lineJoin:'round'}
-  ).addTo(mapL);
+  _trailLine=L.polyline(_trailPts, {...opts, opacity:1.0}).addTo(trailLayer);
 }
 
 /* Adiciona ponto à linha viva — chamado a cada tick da animação */
@@ -1046,6 +1045,13 @@ function initMap(){
       });
     }
   });
+  // Cria pane dedicado para o rastro — z-index 350 fica entre tiles (200) e marcadores (400)
+  // Garante visibilidade no mobile onde canvas layers têm ordem diferente
+  mapL.createPane('trailPane');
+  mapL.getPane('trailPane').style.zIndex = 350;
+  mapL.getPane('trailPane').style.pointerEvents = 'none';
+  trailLayer = L.layerGroup().addTo(mapL);
+
   singleLayer=L.layerGroup().addTo(mapL);
   mapL.addLayer(cluster);
   mapL.on('click',()=>{ if(!activeV) clearSelection(); });
