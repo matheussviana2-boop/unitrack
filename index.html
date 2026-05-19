@@ -656,7 +656,7 @@ let _interpFrom=null;   // {lat,lng} ponto de partida
 let _interpTo=null;     // {lat,lng} ponto de destino
 let _interpT0=null;     // timestamp de início
 let _interpDur=null;    // duração total da animação em ms
-const _INTERP_MS=55000; // duração padrão (5s de margem antes da próx. atualização)
+const _INTERP_MS=30000; // 30s — anima mais rápido para não parecer atrasado
 const _MAX_INTERP_KM=2; // distância máxima para interpolar (acima = falha de GPS)
 /* _prevPos: última posição de cada veículo antes do update atual — para interpolação
    Formato: { [v.id]: { lat, lng, ts } } */
@@ -953,6 +953,7 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
 
 /* Remove tudo do rastro do mapa */
 function clearTrail(){
+  _stopTrailCleaner();
   if(trailLayer) trailLayer.clearLayers();
   _trailLine=null;
   _trailLines=[];
@@ -984,6 +985,23 @@ function _ensureTrailLayer(){
 
 const _TRAIL_WINDOW_MS = 5000; // mantém só os últimos 5s de movimento
 
+/* Timer global que remove pontos antigos do rastro a cada 500ms
+   Roda mesmo quando não há animação ativa — garante janela de 5s sempre */
+let _trailCleanerInt = null;
+function _ensureTrailCleaner(){
+  if(_trailCleanerInt) return;
+  _trailCleanerInt = setInterval(()=>{
+    if(!_trailPts || _trailPts.length === 0) return;
+    const cutoff = Date.now() - _TRAIL_WINDOW_MS;
+    const before = _trailPts.length;
+    _trailPts = _trailPts.filter(p => p.ts >= cutoff);
+    if(_trailPts.length !== before) _redrawTrail();
+  }, 500);
+}
+function _stopTrailCleaner(){
+  if(_trailCleanerInt){ clearInterval(_trailCleanerInt); _trailCleanerInt = null; }
+}
+
 function startTrail(fromLat, fromLng){
   _ensureTrailLayer();
   if(!trailLayer) return;
@@ -993,6 +1011,7 @@ function startTrail(fromLat, fromLng){
   _trailLines=[];
   // Inicia novo array com timestamp
   _trailPts=[{lat:fromLat, lng:fromLng, ts:Date.now()}];
+  _ensureTrailCleaner();
   _trailLine = L.polyline(
     [[fromLat, fromLng]],
     {color:'#00e676', weight:3, opacity:0.6, lineCap:'round', lineJoin:'round',
@@ -1402,9 +1421,11 @@ function selectVehicle(v, fromMap){
   }
 
   if(isSame && fromMap){
-    // Mesmo veículo clicado no marcador → reabre o card sem mexer no rastro/animação
+    // Mesmo veículo clicado no marcador → reabre o card no local visual ATUAL
     if(!card.classList.contains('vis')){
-      mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
+      const mkCur=mkrs[v.id];
+      const ll=mkCur?mkCur.getLatLng():L.latLng(v.lat,v.lng);
+      mapL.flyTo([ll.lat,ll.lng],17,{animate:true,duration:0.9});
       setTimeout(()=>positionCard(v), 950);
     } else {
       card.classList.remove('vis');
@@ -1412,6 +1433,9 @@ function selectVehicle(v, fromMap){
     return;
   }
 
+  // Captura posição visual atual do marcador ANTES de recriá-lo no renderMkrs
+  const mkOld=mkrs[v.id];
+  const llVisual=mkOld?mkOld.getLatLng():L.latLng(v.lat,v.lng);
   // Novo veículo selecionado
   activeV = v;
   stopInterp();
@@ -1422,7 +1446,8 @@ function selectVehicle(v, fromMap){
   document.getElementById('btnClearSel').classList.add('vis');
   renderMkrs(v.id);
   card.classList.remove('vis');
-  mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
+  // Voa para posição visual do marcador (não para v.lat/v.lng que pode estar à frente)
+  mapL.flyTo([llVisual.lat,llVisual.lng],17,{animate:true,duration:0.9});
   // Inicia rastro sem mover marcador para trás
   setTimeout(()=>{
     const mk=mkrs[v.id];
