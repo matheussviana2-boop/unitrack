@@ -652,7 +652,7 @@ let _interpFrom=null;   // {lat,lng} ponto de partida
 let _interpTo=null;     // {lat,lng} ponto de destino
 let _interpT0=null;     // timestamp de início
 let _interpDur=null;    // duração total da animação em ms
-const _INTERP_MS=55000; // duração padrão (5s de margem antes da próx. atualização)
+const _INTERP_MS=50000; // duração da animação (10s de margem antes da próx. atualização)
 const _MAX_INTERP_KM=2; // distância máxima para interpolar (acima = falha de GPS)
 /* _prevPos: última posição de cada veículo antes do update atual — para interpolação
    Formato: { [v.id]: { lat, lng, ts } } */
@@ -670,14 +670,29 @@ let activeFilter=null;
 /* ── VISIBILIDADE DA PÁGINA ── */
 /* Pausa atualizações automáticas quando o app vai para segundo plano */
 let pageVisible = !document.hidden;
+let _bgTs = 0; // timestamp de quando foi para segundo plano
 document.addEventListener('visibilitychange', () => {
   pageVisible = !document.hidden;
   if (pageVisible) {
-    // Voltou ao primeiro plano: se contador já zerou, atualiza imediatamente
-    if (cd <= 0) { load(); }
-    else { startCd(); } // retoma countdown do ponto atual
+    const bgTime = Date.now() - _bgTs; // tempo em segundo plano
+    // Se ficou em segundo plano por mais de 30s ou countdown já zerou → atualiza já
+    if (bgTime > 30000 || cd <= 0) {
+      clearInterval(cdInt);
+      load(); // load() chama startCd() no finally
+    } else {
+      // Ficou pouco tempo — retoma de onde parou sem resetar
+      cdInt = setInterval(()=>{
+        if(!pageVisible) return;
+        cd--;
+        const s=cd%60, m=Math.floor(cd/60);
+        document.getElementById('cdLbl').textContent=m>0?(m+':'+(s<10?'0':'')+s):(s+'s');
+        document.getElementById('rfp').style.width=((cd/RSEC)*100)+'%';
+        if(cd<=0){ clearInterval(cdInt); load(); }
+      }, 1000);
+    }
   } else {
-    // Foi para segundo plano: suspende o interval
+    // Foi para segundo plano: suspende o interval e guarda timestamp
+    _bgTs = Date.now();
     clearInterval(cdInt);
   }
 });
@@ -838,7 +853,7 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   _interpInt=setInterval(()=>{
     const t=Math.min((Date.now()-_interpT0)/_interpDur,1);
     // Easing cúbico: desacelera no final para encaixar no ponto real
-    const ease=t<1?1-Math.pow(1-t,3):1;
+    const ease=t; // linear — velocidade constante, mais natural para veículos
     mk.setLatLng([
       _interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*ease,
       _interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*ease
@@ -870,49 +885,33 @@ function drawTrail(id){
   const trail=_trailPos[String(id)];
   if(!trail || trail.length<1) return;
   const n=trail.length;
-
-  // Com 1 ponto: só marca o ponto anterior — já indica de onde veio
-  // Com 2+ pontos: segmentos com opacidade crescente (mais fraco atrás, opaco na frente)
+  // Segmentos com opacidade crescente: 0.5 (início) → 1.0 (fim)
   for(let i=0;i<n-1;i++){
-    // t=0 no segmento mais antigo, t=1 no mais recente
-    const t = n<3 ? 1 : i/(n-2);
-    const opacity = 0.55 + (0.45*t); // 0.55 → 1.0 — sempre bem visível
+    const t=n<3?1:i/(n-2);
+    const opacity=0.5+(0.5*t);
     const line=L.polyline(
       [[trail[i].lat,trail[i].lng],[trail[i+1].lat,trail[i+1].lng]],
       {color:'#00e676', weight:6, opacity:opacity, lineCap:'round', lineJoin:'round'}
     ).addTo(mapL);
     _trailLines.push(line);
   }
-
-  // Ponto de origem — círculo branco com borda verde para contrastar no mapa
+  // Ponto de origem — círculo branco com borda verde
   const first=trail[0];
   const dot=L.circleMarker([first.lat,first.lng],
     {radius:5, color:'#00e676', fillColor:'#ffffff', fillOpacity:0.9, opacity:1, weight:2.5}
   ).addTo(mapL);
   _trailLines.push(dot);
-
-  // Seta de direção no último segmento (se tiver 2+ pontos)
-  // Indica visualmente para onde o veículo está indo
+  // Seta de direção no último segmento (com 2+ pontos)
   if(n>=2){
     const a=trail[n-2], b=trail[n-1];
     const angle=Math.atan2(b.lng-a.lng, b.lat-a.lat)*(180/Math.PI);
     const arrow=L.marker([b.lat,b.lng],{
       icon:L.divIcon({
         className:'',
-        html:`<div style="
-          width:0;height:0;
-          border-left:6px solid transparent;
-          border-right:6px solid transparent;
-          border-bottom:12px solid #00e676;
-          transform:rotate(${angle}deg);
-          transform-origin:center bottom;
-          filter:drop-shadow(0 0 3px rgba(0,230,118,0.8));
-        "></div>`,
-        iconSize:[12,12],
-        iconAnchor:[6,6]
+        html:`<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:12px solid #00e676;transform:rotate(${angle}deg);transform-origin:center bottom;filter:drop-shadow(0 0 3px rgba(0,230,118,0.8));"></div>`,
+        iconSize:[12,12],iconAnchor:[6,6]
       }),
-      interactive:false,
-      zIndexOffset:1000
+      interactive:false,zIndexOffset:1000
     }).addTo(mapL);
     _trailLines.push(arrow);
   }
@@ -1632,6 +1631,9 @@ async function loadLinhas(){
 async function load(){
   // Não atualiza se o app estiver em segundo plano
   if(!pageVisible){ cd=0; return; }
+  // Garante que não há dois loads rodando simultaneamente
+  if(load._running){ return; }
+  load._running=true;
   const btn=document.getElementById('btnR');btn.classList.add('sp');
   if(allV.length===0)document.getElementById('ovL').classList.remove('hidden');
   try{
@@ -1713,6 +1715,7 @@ async function load(){
     }
     console.error('[UniTrack]',e);
   }finally{
+    load._running=false;
     btn.classList.remove('sp');startCd();
   }
 }
