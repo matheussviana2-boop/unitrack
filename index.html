@@ -641,6 +641,8 @@ var _needProxy=false;
 var _PROXY='';
 const API  =_API_BASE;
 const API2 =_needProxy?_PROXY+encodeURIComponent(_API2_BASE):_API2_BASE;
+/* Cache-busting: gera URL com timestamp para garantir dado fresco em qualquer proxy/CDN */
+function apiUrl(base){ return base+'?_='+Date.now(); }
 const RSEC=120;
 let mapL,cluster,singleLayer,layerStreet,layerSat,currentLayer='street';
 let allV=[],filt=[],mkrs={},cdInt=null,cd=RSEC,activeV=null,searchQ='',selIdx=-1;
@@ -1141,24 +1143,17 @@ function clearSelection(){
 
 /* ── FILTER BY STATUS (clique no badge) ── */
 function filterByStatus(status){
-  // "Total" ou toggle do filtro ativo → limpa seleção e mostra todos
   if(status==='all' || activeFilter===status){
-    // Reutiliza clearSelection para garantir que activeV, filt e mapa
-    // sejam todos resetados corretamente, independente de como o veículo
-    // foi selecionado (sidebar ou clique direto no mapa com zoom)
     clearSelection();
     return;
   }
   activeFilter=status;
-  // Limpa busca textual ao filtrar por status
   document.getElementById('acInput').value='';
   document.getElementById('acClear').classList.remove('show');
   document.getElementById('acDrop').classList.remove('open');
   searchQ=''; selIdx=-1;
   renderList();
-  // Abre sidebar para mostrar resultado
   if(isMobile()) openSidebar();
-  // Atualiza visual dos itens do badge
   updateBadgeHighlight();
 }
 
@@ -1401,7 +1396,11 @@ async function loadLinhas(){
   try{
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),8000);
-    const r=await fetch(API2,{cache:'no-cache',signal:ctrl.signal});
+    const r=await fetch(apiUrl(API2),{
+      cache:'no-store',
+      signal:ctrl.signal,
+      headers:{'Cache-Control':'no-cache, no-store, must-revalidate','Pragma':'no-cache'}
+    });
     clearTimeout(tid);
     if(!r.ok)return;
     const raw=await r.json();
@@ -1476,7 +1475,11 @@ async function load(){
     // Fetch principal com timeout de 15s para compatibilidade iOS
     const ctrl=new AbortController();
     const tid=setTimeout(()=>ctrl.abort(),15000);
-    const r = await fetch(API,{cache:'no-cache',signal:ctrl.signal});
+    const r = await fetch(apiUrl(API),{
+      cache:'no-store',
+      signal:ctrl.signal,
+      headers:{'Cache-Control':'no-cache, no-store, must-revalidate','Pragma':'no-cache'}
+    });
     clearTimeout(tid);
 
     // Aguarda linhas com timeout adicional de 5s
