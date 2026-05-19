@@ -647,12 +647,16 @@ const RSEC=60;
 let mapL,cluster,singleLayer,layerStreet,layerSat,currentLayer='street';
 let allV=[],filt=[],mkrs={},cdInt=null,cd=RSEC,activeV=null,searchQ='',selIdx=-1;
 /* ── INTERPOLAÇÃO ── */
-let _interpInt=null;   // setInterval da animação
-let _interpFrom=null;  // {lat,lng} ponto de partida
-let _interpTo=null;    // {lat,lng} ponto de destino
-let _interpT0=null;    // timestamp de início
-const _INTERP_MS=55000;// duração da animação (5s de margem antes da próx. atualização)
-const _MAX_INTERP_KM=2;// distância máxima para interpolar (acima disso = falha de GPS)
+let _interpInt=null;    // setInterval da animação
+let _interpFrom=null;   // {lat,lng} ponto de partida
+let _interpTo=null;     // {lat,lng} ponto de destino
+let _interpT0=null;     // timestamp de início
+let _interpDur=null;    // duração total da animação em ms
+const _INTERP_MS=55000; // duração padrão (5s de margem antes da próx. atualização)
+const _MAX_INTERP_KM=2; // distância máxima para interpolar (acima = falha de GPS)
+/* _prevPos: guarda última posição conhecida de cada veículo para interpolação imediata
+   Formato: { [v.id]: { lat, lng, ts } }  — sobrescrito a cada load(), ~50KB total */
+let _prevPos={};
 /* linhaMap: frota -> { nomeLinha, statusLinha } */
 let linhaMap={};
 /* Filtro ativo por status ao clicar no badge ('green'|'yellow'|'dark'|null) */
@@ -786,12 +790,16 @@ function startCd(){
 /* ══════════════════════════════════════════════════════
    INTERPOLAÇÃO DE POSIÇÃO
    Anima o marcador do veículo selecionado suavemente
-   entre a posição anterior e a nova, durante 55s.
-   Só ativa para veículos green e distância < 2 km.
+   entre posição anterior e nova.
+   - Só ativa para veículos green
+   - Distância > 2km → teleporta (falha de GPS)
+   - Distância < 5m  → não anima (parado)
+   - Ao selecionar: calcula ponto intermediário já
+     percorrido com base no timestamp da transmissão
    Zero chamadas extras à API — puramente local.
 ══════════════════════════════════════════════════════ */
 
-/* Distância Haversine em km entre dois pontos lat/lng */
+/* Distância Haversine em km entre dois pontos */
 function _haversineKm(lat1,lng1,lat2,lng2){
   const R=6371;
   const dLat=(lat2-lat1)*Math.PI/180;
@@ -802,38 +810,36 @@ function _haversineKm(lat1,lng1,lat2,lng2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-/* Para a interpolação em curso (se houver) */
+/* Para a interpolação em curso */
 function stopInterp(){
   if(_interpInt){ clearInterval(_interpInt); _interpInt=null; }
-  _interpFrom=null; _interpTo=null; _interpT0=null;
+  _interpFrom=null; _interpTo=null; _interpT0=null; _interpDur=null;
 }
 
-/* Inicia interpolação do marcador mk de (fromLat,fromLng) → (toLat,toLng) */
-function startInterp(mk, fromLat, fromLng, toLat, toLng){
+/* Inicia interpolação do marcador mk de (fromLat,fromLng) → (toLat,toLng)
+   dur: duração em ms (padrão _INTERP_MS) — permite começar no meio do caminho */
+function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   stopInterp();
-
-  const dist = _haversineKm(fromLat, fromLng, toLat, toLng);
-
-  // Sem movimento real (parado) ou GPS pulou longe demais → não interpola
-  if(dist < 0.005 || dist > _MAX_INTERP_KM){
-    mk.setLatLng([toLat, toLng]);
+  const dist=_haversineKm(fromLat,fromLng,toLat,toLng);
+  // Parado ou GPS pulou longe demais → só reposiciona, sem animar
+  if(dist<0.005 || dist>_MAX_INTERP_KM){
+    mk.setLatLng([toLat,toLng]);
     return;
   }
-
-  _interpFrom = {lat:fromLat, lng:fromLng};
-  _interpTo   = {lat:toLat,   lng:toLng};
-  _interpT0   = Date.now();
-
-  _interpInt = setInterval(()=>{
-    const elapsed = Date.now() - _interpT0;
-    const t = Math.min(elapsed / _INTERP_MS, 1); // 0.0 → 1.0
-    // Easing suave: desacelera no final para encaixar na posição real
-    const ease = t < 1 ? 1 - Math.pow(1 - t, 3) : 1;
-    const lat = _interpFrom.lat + (_interpTo.lat - _interpFrom.lat) * ease;
-    const lng = _interpFrom.lng + (_interpTo.lng - _interpFrom.lng) * ease;
-    mk.setLatLng([lat, lng]);
-    if(t >= 1) stopInterp(); // chegou ao destino, para o interval
-  }, 100); // atualiza a cada 100ms (~10 fps — suave e leve)
+  _interpFrom={lat:fromLat,lng:fromLng};
+  _interpTo  ={lat:toLat,  lng:toLng};
+  _interpT0  =Date.now();
+  _interpDur =dur||_INTERP_MS;
+  _interpInt=setInterval(()=>{
+    const t=Math.min((Date.now()-_interpT0)/_interpDur,1);
+    // Easing cúbico: desacelera no final para encaixar no ponto real
+    const ease=t<1?1-Math.pow(1-t,3):1;
+    mk.setLatLng([
+      _interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*ease,
+      _interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*ease
+    ]);
+    if(t>=1) stopInterp();
+  },100); // ~10 fps — suave e leve
 }
 
 /* ── MAP ── */
@@ -1172,7 +1178,7 @@ function selectVehicle(v, fromMap){
 
   // Novo veículo selecionado
   activeV = v;
-  stopInterp(); // para qualquer interpolação anterior
+  stopInterp();
   document.querySelectorAll('.vi').forEach(e=>e.classList.remove('act'));
   const li = document.getElementById(`li-${v.id}`);
   if(li){li.classList.add('act');li.scrollIntoView({behavior:'smooth',block:'nearest'});}
@@ -1180,7 +1186,28 @@ function selectVehicle(v, fromMap){
   renderMkrs(v.id);
   card.classList.remove('vis');
   mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
-  setTimeout(()=>positionCard(v), 950);
+  // Inicia interpolação imediata se tiver posição anterior guardada
+  // Calcula quanto tempo já passou desde a última transmissão para
+  // começar a animação no ponto certo (não sempre do início)
+  setTimeout(()=>{
+    const prev=_prevPos[String(v.id)];
+    const mk=mkrs[v.id];
+    if(prev && mk && getStatus(v)==='green'){
+      const now=Date.now();
+      const elapsed=now-prev.ts;          // ms desde a transmissão anterior
+      const remaining=_INTERP_MS-elapsed; // quanto ainda falta animar
+      if(remaining>2000){
+        // Ainda vale animar — calcula posição intermediária já percorrida
+        const progress=Math.min(elapsed/_INTERP_MS,1);
+        const ease=1-Math.pow(1-progress,3);
+        const midLat=prev.lat+(v.lat-prev.lat)*ease;
+        const midLng=prev.lng+(v.lng-prev.lng)*ease;
+        // Anima do ponto intermediário até o destino final, no tempo restante
+        startInterp(mk, midLat, midLng, v.lat, v.lng, remaining);
+      }
+    }
+    positionCard(v);
+  }, 950);
   closeSidebarIfMobile();
 }
 
@@ -1195,7 +1222,7 @@ function clearSelection(){
   document.getElementById('acClear').classList.remove('show');
   document.getElementById('acDrop').classList.remove('open');
   searchQ=''; selIdx=-1; activeFilter=null;
-  stopInterp();        // para interpolação se estava rodando
+  stopInterp();
   filt=[...allV];
   renderList();
   updateBadgeHighlight();
@@ -1570,28 +1597,30 @@ async function load(){
         if(raw0[k]!==undefined) console.log('[UniTrack]  '+k+'='+JSON.stringify(raw0[k]));
       });
     }
+    // Salva posição atual de cada veículo ANTES de sobrescrever allV
+    // Isso alimenta _prevPos para interpolação imediata ao selecionar
+    const now=Date.now();
+    allV.forEach(v=>{ _prevPos[String(v.id)]={lat:v.lat,lng:v.lng,ts:now}; });
+
     renderList();
     if(!activeV){
       fitAll();
     } else {
-      // Veículo selecionado: atualiza com dados frescos e inicia interpolação
-      const fresh = allV.find(v => String(v.id) === String(activeV.id));
+      // Veículo selecionado: atualiza com dados frescos e reinicia interpolação
+      const fresh=allV.find(v=>String(v.id)===String(activeV.id));
       if(fresh){
-        const prevLat = activeV.lat, prevLng = activeV.lng;
-        activeV = fresh;
-        const mk = mkrs[fresh.id];
+        const prevLat=activeV.lat, prevLng=activeV.lng;
+        activeV=fresh;
+        const mk=mkrs[fresh.id];
         if(mk){
-          // Para interpolação anterior e inicia nova do ponto atual ao novo
           stopInterp();
-          if(getStatus(fresh) === 'green'){
-            startInterp(mk, prevLat, prevLng, fresh.lat, fresh.lng);
+          if(getStatus(fresh)==='green'){
+            startInterp(mk, prevLat, prevLng, fresh.lat, fresh.lng, _INTERP_MS);
           } else {
-            // Desligado/offline: teleporta direto sem animação
             mk.setLatLng([fresh.lat, fresh.lng]);
           }
         }
-        // Atualiza card com dados novos
-        const card = document.getElementById('iCard');
+        const card=document.getElementById('iCard');
         if(card.classList.contains('vis')) positionCard(fresh);
       }
     }
