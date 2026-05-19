@@ -883,7 +883,7 @@ function _routePoint(t){
 function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   stopInterp();
   const dist=_haversineKm(fromLat,fromLng,toLat,toLng);
-  // Distância insignificante (<30m) ou GPS saltou longe demais → reposiciona sem animar
+  // <30m ou >2km → não anima, só reposiciona (parado ou GPS com falha)
   if(dist<0.03 || dist>_MAX_INTERP_KM){
     mk.setLatLng([toLat,toLng]);
     return;
@@ -894,58 +894,52 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   _interpDur =dur||_INTERP_MS;
   _routePts=[];_routeDists=[];_routeTotal=0;
 
-  /* Tenta buscar rota real pelo OSRM público
-     Só chama se distância >= 100m — abaixo disso o OSRM pode retornar
-     rotas circulares tentando ajustar para a malha viária mais próxima
-     Timeout de 3s — se não responder, usa linha reta */
-  const osrmUrl=`https://router.project-osrm.org/route/v1/driving/`
-    +`${fromLng},${fromLat};${toLng},${toLat}`
-    +`?overview=full&geometries=geojson`;
-
-  const ctrl=new AbortController();
-  const tid=setTimeout(()=>ctrl.abort(),3000);
-
-  if(dist>=0.2) fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
-    .then(r=>r.json())
-    .then(data=>{
-      clearTimeout(tid);
-      const coords=data?.routes?.[0]?.geometry?.coordinates;
-      if(coords && coords.length>=2){
+  // OSRM só para distâncias >= 200m (abaixo disso linha reta é imperceptível)
+  if(dist>=0.2){
+    const osrmUrl='https://router.project-osrm.org/route/v1/driving/'
+      +fromLng+','+fromLat+';'+toLng+','+toLat
+      +'?overview=full&geometries=geojson';
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),3000);
+    fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
+      .then(r=>r.json())
+      .then(data=>{
+        clearTimeout(tid);
+        const coords=data && data.routes && data.routes[0] && data.routes[0].geometry && data.routes[0].geometry.coordinates;
+        if(!coords || coords.length<2) return;
         const pts=coords.map(c=>({lat:c[1],lng:c[0]}));
         let rd=[0];
         for(let i=1;i<pts.length;i++){
           rd.push(rd[i-1]+_haversineKm(pts[i-1].lat,pts[i-1].lng,pts[i].lat,pts[i].lng));
         }
         const rLen=rd[rd.length-1];
-        if(rLen<=dist*4){
-          _routePts=pts;_routeDists=rd;_routeTotal=rLen;
-          console.log('[OSRM] ok',pts.length,'pts',rLen.toFixed(2)+'km');
-        } else {
-          console.warn('[OSRM] rejeitado:',rLen.toFixed(2)+'km vs',dist.toFixed(2)+'km');
+        // Filtro anti-looping: rejeita rota > 3x distância direta
+        if(rLen>dist*3){
+          console.warn('[OSRM] rejeitado: rota',rLen.toFixed(2)+'km vs direto',dist.toFixed(2)+'km');
+          return;
         }
-      }
-    })
-    .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e?.message); });
+        _routePts=pts;_routeDists=rd;_routeTotal=rLen;
+        console.log('[OSRM] ok',pts.length,'pts',rLen.toFixed(2)+'km');
+      })
+      .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e&&e.message); });
+  }
 
-  // Inicia linha viva imediatamente (vai sendo atualizada com os pontos da rota)
   if(activeV) startTrail(fromLat, fromLng);
 
   _interpInt=setInterval(()=>{
     const t=Math.min((Date.now()-_interpT0)/_interpDur,1);
     let lat,lng;
     if(_routePts.length>=2){
-      // Usa rota real do OSRM
       const pt=_routePoint(t);
       lat=pt.lat; lng=pt.lng;
     } else {
-      // Fallback: linha reta enquanto OSRM não respondeu
       lat=_interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*t;
       lng=_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*t;
     }
     mk.setLatLng([lat,lng]);
-      if(activeV) updateTrail(lat,lng);
+    if(activeV) updateTrail(lat,lng);
     if(t>=1) stopInterp();
-  },500); // 2fps para o rastro — suficiente no mobile
+  },100); // 10fps — suave no mobile, leve no processamento
 }
 
 /* ══════════════════════════════════════════════════════
@@ -980,49 +974,72 @@ function _ensureTrailLayer(){
   trailLayer = L.layerGroup([], {pane:'trailPane'}).addTo(mapL);
 }
 
+/* ══════════════════════════════════════════════════════
+   RASTRO COM JANELA DESLIZANTE DE 5 SEGUNDOS
+   - Cada ponto tem timestamp
+   - Pontos com idade > 5s são removidos automaticamente
+   - Rastro nunca fica longo nem polui o mapa
+   - Reconstrói polyline a cada tick (mais confiável no mobile)
+══════════════════════════════════════════════════════ */
+
+const _TRAIL_WINDOW_MS = 5000; // mantém só os últimos 5s de movimento
+
 function startTrail(fromLat, fromLng){
   _ensureTrailLayer();
   if(!trailLayer) return;
-  const opts={
-    color:'#00e676', weight:3,
-    lineCap:'round', lineJoin:'round',
-    pane:'trailPane',
-    renderer:_trailRenderer
-  };
-  // Remove linha anterior completamente — só mantém rastro atual
+  // Limpa rastro anterior completamente
   if(_trailLine){ trailLayer.removeLayer(_trailLine); _trailLine=null; }
-  _trailLines.forEach(l=>trailLayer.removeLayer(l));
+  if(trailLayer.clearLayers) trailLayer.clearLayers();
   _trailLines=[];
-  // Nova linha viva com estilo mais sutil
-  _trailPts=[[fromLat, fromLng]];
-  _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
+  // Inicia novo array com timestamp
+  _trailPts=[{lat:fromLat, lng:fromLng, ts:Date.now()}];
+  _trailLine = L.polyline(
+    [[fromLat, fromLng]],
+    {color:'#00e676', weight:3, opacity:0.6, lineCap:'round', lineJoin:'round',
+     pane:'trailPane', renderer:_trailRenderer}
+  ).addTo(trailLayer);
 }
 
-/* Adiciona ponto à linha viva — chamado a cada tick da animação */
 function updateTrail(lat, lng){
   if(!_trailLine || !trailLayer) return;
-  // Filtra pontos muito próximos (~5m) para não sobrecarregar
-  const last=_trailPts[_trailPts.length-1];
+  const now = Date.now();
+  const last = _trailPts[_trailPts.length-1];
+  // Filtra pontos muito próximos (~5m)
   if(last){
-    const dlat=Math.abs(lat-last[0]), dlng=Math.abs(lng-last[1]);
-    if(dlat<0.00005 && dlng<0.00005) return;
+    const dlat=Math.abs(lat-last.lat), dlng=Math.abs(lng-last.lng);
+    if(dlat<0.00005 && dlng<0.00005){
+      // Mesmo sem novo ponto, remove pontos antigos da janela
+      const cutoff = now - _TRAIL_WINDOW_MS;
+      const before = _trailPts.length;
+      _trailPts = _trailPts.filter(p => p.ts >= cutoff);
+      if(_trailPts.length !== before){
+        _redrawTrail();
+      }
+      return;
+    }
   }
-  _trailPts.push([lat, lng]);
-  // Reconstrói polyline completamente — mais confiável no mobile/WebKit
-  // que chamar setLatLngs numa instância existente
-  const opts={
-    color:'#00e676', weight:3,
-    lineCap:'round', lineJoin:'round',
-    pane:'trailPane',
-    renderer:_trailRenderer
-  };
-  trailLayer.removeLayer(_trailLine);
-  _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
+  // Adiciona novo ponto
+  _trailPts.push({lat, lng, ts:now});
+  // Remove pontos fora da janela de 5s
+  const cutoff = now - _TRAIL_WINDOW_MS;
+  _trailPts = _trailPts.filter(p => p.ts >= cutoff);
+  _redrawTrail();
 }
 
-/* drawTrail: compatibilidade — chamado ao selecionar veículo
-   Se não tem animação ainda, não desenha nada (linha começa na 1ª animação) */
-function drawTrail(id){ /* linha começa com a animação via startTrail */ }
+function _redrawTrail(){
+  if(!_trailLine || !trailLayer) return;
+  trailLayer.removeLayer(_trailLine);
+  if(_trailPts.length < 1) return;
+  const latlngs = _trailPts.map(p => [p.lat, p.lng]);
+  _trailLine = L.polyline(
+    latlngs,
+    {color:'#00e676', weight:3, opacity:0.6, lineCap:'round', lineJoin:'round',
+     pane:'trailPane', renderer:_trailRenderer}
+  ).addTo(trailLayer);
+}
+
+/* drawTrail: compatibilidade — linha começa via startTrail na animação */
+function drawTrail(id){ /* noop */ }
 
 /* ── MAP ── */
 function initMap(){
