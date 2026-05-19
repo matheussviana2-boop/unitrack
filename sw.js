@@ -31,19 +31,12 @@ self.addEventListener('fetch', event => {
 
   if(isNoCache){
     event.respondWith(
-      fetch(event.request, {
-        cache: 'no-store',
-        headers: new Headers({
-          ...Object.fromEntries(event.request.headers.entries()),
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-        }),
-      }).catch(() => new Response('', {status: 503}))
+      fetch(event.request,{cache:'no-store'}).catch(()=>new Response('',{status:503}))
     );
     return;
   }
 
-  if(url.href.includes('tile') || url.href.includes('carto')){
+  if(url.href.includes('tile')||url.href.includes('carto')){
     event.respondWith(caches.match(event.request).then(c=>c||fetch(event.request).then(r=>{
       const cl=r.clone();caches.open(CACHE_NAME).then(ca=>ca.put(event.request,cl));return r;
     })).catch(()=>new Response('',{status:503})));

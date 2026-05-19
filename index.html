@@ -980,18 +980,25 @@ function startTrail(fromLat, fromLng){
   _ensureTrailLayer();
   if(!trailLayer) return;
   const opts={
-    color:'#00e676', weight:6,
+    color:'#00e676', weight:3,
     lineCap:'round', lineJoin:'round',
     pane:'trailPane',
     renderer:_trailRenderer
   };
-  // Remove linha anterior completamente — só mantém rastro atual, sem segmento apagado
-  if(_trailLine){ trailLayer.removeLayer(_trailLine); _trailLine=null; }
-  _trailLines.forEach(l=>trailLayer.removeLayer(l));
-  _trailLines=[];
+  // Congela linha anterior como segmento estático
+  if(_trailLine){
+    trailLayer.removeLayer(_trailLine);
+    const frozen=L.polyline([..._trailPts], {...opts, opacity:0.35}).addTo(trailLayer);
+    _trailLines.push(frozen);
+    if(_trailLines.length>1){
+      trailLayer.removeLayer(_trailLines[0]);
+      _trailLines.shift();
+    }
+    _trailLine=null;
+  }
   // Nova linha viva
   _trailPts=[[fromLat, fromLng]];
-  _trailLine=L.polyline([..._trailPts], {...opts, opacity:1.0}).addTo(trailLayer);
+  _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
 }
 
 /* Adiciona ponto à linha viva — chamado a cada tick da animação */
@@ -1007,13 +1014,13 @@ function updateTrail(lat, lng){
   // Reconstrói polyline completamente — mais confiável no mobile/WebKit
   // que chamar setLatLngs numa instância existente
   const opts={
-    color:'#00e676', weight:6,
+    color:'#00e676', weight:3,
     lineCap:'round', lineJoin:'round',
     pane:'trailPane',
     renderer:_trailRenderer
   };
   trailLayer.removeLayer(_trailLine);
-  _trailLine=L.polyline([..._trailPts], {...opts, opacity:1.0}).addTo(trailLayer);
+  _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
 }
 
 /* drawTrail: compatibilidade — chamado ao selecionar veículo
@@ -1377,12 +1384,26 @@ function selectVehicle(v, fromMap){
   renderMkrs(v.id);
   card.classList.remove('vis');
   mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
-  // Inicia rastro a partir da posição atual sem mover o marcador para trás
-  // (evita o efeito "fantasma" onde o marcador saltava para posição anterior e voltava)
+  // rastro começa junto com a animação via startTrail — não precisa drawTrail aqui
+  // Inicia interpolação imediata usando posição anterior guardada em _prevPos
   setTimeout(()=>{
+    const prev=_prevPos[String(v.id)];
     const mk=mkrs[v.id];
-    if(mk && getStatus(v)==='green' && activeV){
-      startTrail(v.lat, v.lng);
+    if(prev && mk && getStatus(v)==='green'){
+      const currTs=parseData(v.datahora);
+      const currMs=currTs?currTs.getTime():Date.now();
+      const interval=currMs-prev.ts;          // intervalo entre as duas transmissões
+      const sinceLastTx=Date.now()-currMs;     // tempo decorrido desde a transmissão atual
+      const animDur=Math.max(interval,_INTERP_MS); // duração mínima de 55s
+      const remaining=animDur-sinceLastTx;     // tempo restante até o próximo update
+      if(remaining>2000 && interval>1000){
+        // Calcula ponto intermediário já percorrido
+        const progress=Math.min(sinceLastTx/animDur,1);
+        const ease=1-Math.pow(1-progress,3);
+        const midLat=prev.lat+(v.lat-prev.lat)*ease;
+        const midLng=prev.lng+(v.lng-prev.lng)*ease;
+        startInterp(mk, midLat, midLng, v.lat, v.lng, remaining);
+      }
     }
     positionCard(v);
   }, 950);
