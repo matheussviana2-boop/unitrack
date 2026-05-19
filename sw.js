@@ -5,15 +5,24 @@ self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(STATIC_ASSETS).catch(()=>{})));
   self.skipWaiting();
 });
+
 self.addEventListener('activate', event => {
   event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k=>k!==CACHE_NAME).map(k=>caches.delete(k)))));
   self.clients.claim();
 });
+
+// ── Responde ao SKIP_WAITING enviado pelo index.html quando há atualização pronta
+// Permite que a nova versão assuma o controle imediatamente, sem fechar o app
+self.addEventListener('message', event => {
+  if(event.data && event.data.type === 'SKIP_WAITING'){
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
   // NUNCA cachear chamadas de API — sempre busca da rede com headers anti-cache
-  // Cobre tanto rotas /api/* quanto URLs diretas da BrasilSat e afins
   if(url.pathname.startsWith('/api/') ||
      url.pathname.includes('/posicao') ||
      url.pathname.includes('/viagens') ||
