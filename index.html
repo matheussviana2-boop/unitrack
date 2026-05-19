@@ -335,7 +335,7 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
     transform:translateX(-110%)!important;
     transition:transform 0.25s cubic-bezier(.4,0,.2,1)!important;
     box-shadow:6px 0 30px rgba(0,0,0,0.8)!important;
-    overflow:hidden!important;
+    overflow:visible!important;
     display:flex!important;
     flex-direction:column!important;
   }
@@ -922,7 +922,7 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
         console.log('[OSRM] ok',_routePts.length,'pts');
       }
     })
-    .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e?.message); });
+    .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e?.message||e); });
 
   // Inicia linha viva imediatamente (vai sendo atualizada com os pontos da rota)
   if(activeV) startTrail(fromLat, fromLng);
@@ -957,6 +957,9 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
 /* Remove tudo do rastro do mapa */
 function clearTrail(){
   if(trailLayer) trailLayer.clearLayers();
+  if(_trailRenderer && mapL){
+    // Garante que o SVG renderer está limpo
+  }
   _trailLine=null;
   _trailLines=[];
   _trailPts=[];
@@ -986,10 +989,11 @@ function startTrail(fromLat, fromLng){
     pane:'trailPane',
     renderer:_trailRenderer
   };
-  // Remove linha anterior completamente — só mantém rastro atual
-  if(_trailLine){ trailLayer.removeLayer(_trailLine); _trailLine=null; }
-  _trailLines.forEach(l=>trailLayer.removeLayer(l));
+  // Limpa TODO rastro existente antes de iniciar novo
+  if(trailLayer) trailLayer.clearLayers();
+  _trailLine=null;
   _trailLines=[];
+  _trailPts=[];
   // Nova linha viva com estilo mais sutil
   _trailPts=[[fromLat, fromLng]];
   _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
@@ -1008,13 +1012,13 @@ function updateTrail(lat, lng){
   // Reconstrói polyline completamente — mais confiável no mobile/WebKit
   // que chamar setLatLngs numa instância existente
   const opts={
-    color:'#00e676', weight:3,
+    color:'#00e676', weight:6,
     lineCap:'round', lineJoin:'round',
     pane:'trailPane',
     renderer:_trailRenderer
   };
   trailLayer.removeLayer(_trailLine);
-  _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
+  _trailLine=L.polyline([..._trailPts], {...opts, opacity:1.0}).addTo(trailLayer);
 }
 
 /* drawTrail: compatibilidade — chamado ao selecionar veículo
