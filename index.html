@@ -919,9 +919,10 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
                          _routePts[i].lat,_routePts[i].lng));
         }
         _routeTotal=_routeDists[_routeDists.length-1];
+        console.log('[OSRM] ok',_routePts.length,'pts');
       }
     })
-    .catch(()=>{ clearTimeout(tid); /* fallback linha reta */ });
+    .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e?.message); });
 
   // Inicia linha viva imediatamente (vai sendo atualizada com os pontos da rota)
   if(activeV) startTrail(fromLat, fromLng);
@@ -1007,13 +1008,13 @@ function updateTrail(lat, lng){
   // Reconstrói polyline completamente — mais confiável no mobile/WebKit
   // que chamar setLatLngs numa instância existente
   const opts={
-    color:'#00e676', weight:6,
+    color:'#00e676', weight:3,
     lineCap:'round', lineJoin:'round',
     pane:'trailPane',
     renderer:_trailRenderer
   };
   trailLayer.removeLayer(_trailLine);
-  _trailLine=L.polyline([..._trailPts], {...opts, opacity:1.0}).addTo(trailLayer);
+  _trailLine=L.polyline([..._trailPts], {...opts, opacity:0.6}).addTo(trailLayer);
 }
 
 /* drawTrail: compatibilidade — chamado ao selecionar veículo
