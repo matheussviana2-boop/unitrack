@@ -1132,9 +1132,6 @@ function clearSelection(){
   document.getElementById('acClear').classList.remove('show');
   document.getElementById('acDrop').classList.remove('open');
   searchQ=''; selIdx=-1; activeFilter=null;
-  // Garante que filt reflete todos os veículos antes de renderizar e fazer fitAll
-  // (sem isso, zoom direto no mapa sem usar sidebar deixava filt vazio/parcial,
-  //  impedindo o botão "Total" de voltar a mostrar todos os veículos)
   filt=[...allV];
   renderList();
   updateBadgeHighlight();
@@ -1144,12 +1141,15 @@ function clearSelection(){
 
 /* ── FILTER BY STATUS (clique no badge) ── */
 function filterByStatus(status){
-  // Toggle: clicou no mesmo filtro ativo → limpa
-  if(activeFilter===status || status==='all'){
-    activeFilter=null;
-  } else {
-    activeFilter=status;
+  // "Total" ou toggle do filtro ativo → limpa seleção e mostra todos
+  if(status==='all' || activeFilter===status){
+    // Reutiliza clearSelection para garantir que activeV, filt e mapa
+    // sejam todos resetados corretamente, independente de como o veículo
+    // foi selecionado (sidebar ou clique direto no mapa com zoom)
+    clearSelection();
+    return;
   }
+  activeFilter=status;
   // Limpa busca textual ao filtrar por status
   document.getElementById('acInput').value='';
   document.getElementById('acClear').classList.remove('show');
