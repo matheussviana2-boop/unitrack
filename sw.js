@@ -12,15 +12,12 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('message', event => {
-  if(event.data && event.data.type === 'SKIP_WAITING'){
-    self.skipWaiting();
-  }
+  if(event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // NUNCA cachear — sempre vai direto à rede
   const isNoCache =
     url.pathname.startsWith('/api/') ||
     url.pathname.includes('/posicao') ||
@@ -41,12 +38,11 @@ self.addEventListener('fetch', event => {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
         }),
-      }).catch(() => new Response('', { status: 503 }))
+      }).catch(() => new Response('', {status: 503}))
     );
     return;
   }
 
-  // Tiles do mapa — cache com fallback
   if(url.href.includes('tile') || url.href.includes('carto')){
     event.respondWith(caches.match(event.request).then(c=>c||fetch(event.request).then(r=>{
       const cl=r.clone();caches.open(CACHE_NAME).then(ca=>ca.put(event.request,cl));return r;
@@ -54,7 +50,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Assets estáticos — cache first
   event.respondWith(caches.match(event.request).then(c=>{
     if(c)return c;
     return fetch(event.request).then(r=>{
