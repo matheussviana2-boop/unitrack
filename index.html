@@ -654,9 +654,12 @@ let _interpT0=null;     // timestamp de início
 let _interpDur=null;    // duração total da animação em ms
 const _INTERP_MS=55000; // duração padrão (5s de margem antes da próx. atualização)
 const _MAX_INTERP_KM=2; // distância máxima para interpolar (acima = falha de GPS)
-/* _prevPos: guarda última posição conhecida de cada veículo para interpolação imediata
-   Formato: { [v.id]: { lat, lng, ts } }  — sobrescrito a cada load(), ~50KB total */
-let _prevPos={};
+/* _histPos: histórico das últimas 4 posições de cada veículo
+   Formato: { [v.id]: [{lat,lng,ts}, ...] } — máx 4 entradas, FIFO
+   Permite interpolar do ponto mais antigo disponível até o atual,
+   cobrindo casos em que o usuário seleciona minutos após a última transmissão.
+   ~200KB total em memória — insignificante */
+let _histPos={};
 /* linhaMap: frota -> { nomeLinha, statusLinha } */
 let linhaMap={};
 /* Filtro ativo por status ao clicar no badge ('green'|'yellow'|'dark'|null) */
@@ -1186,25 +1189,28 @@ function selectVehicle(v, fromMap){
   renderMkrs(v.id);
   card.classList.remove('vis');
   mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
-  // Inicia interpolação imediata usando posição anterior guardada em _prevPos
-  // elapsed = tempo entre transmissão anterior e atual (intervalo real da API)
-  // progress = quanto desse intervalo já passou → começa no ponto intermediário certo
+  // Inicia interpolação imediata usando histórico de posições (_histPos)
+  // Usa a entrada mais antiga disponível como ponto de partida,
+  // cobrindo casos em que o usuário seleciona minutos após a última transmissão
   setTimeout(()=>{
-    const prev=_prevPos[String(v.id)];
+    const hist=_histPos[String(v.id)]||[];
     const mk=mkrs[v.id];
-    if(prev && mk && getStatus(v)==='green'){
+    if(hist.length>=2 && mk && getStatus(v)==='green'){
+      const oldest=hist[0];                        // ponto mais antigo disponível
       const currTs=parseData(v.datahora);
       const currMs=currTs?currTs.getTime():Date.now();
-      const interval=currMs-prev.ts;          // intervalo entre as duas transmissões
-      const sinceLastTx=Date.now()-currMs;     // tempo decorrido desde a transmissão atual
-      const animDur=Math.max(interval,_INTERP_MS); // duração mínima de 55s
-      const remaining=animDur-sinceLastTx;     // tempo restante até o próximo update
-      if(remaining>2000 && interval>1000){
-        // Calcula ponto intermediário já percorrido
+      const totalSpan=currMs-oldest.ts;            // janela total de tempo coberta
+      const sinceLastTx=Date.now()-currMs;         // tempo desde a última transmissão
+      // animDur: pelo menos _INTERP_MS, mas nunca menos que o span real
+      const animDur=Math.max(totalSpan, _INTERP_MS);
+      const remaining=animDur-sinceLastTx;
+      const dist=_haversineKm(oldest.lat,oldest.lng,v.lat,v.lng);
+      if(remaining>2000 && totalSpan>1000 && dist>0.005 && dist<_MAX_INTERP_KM){
+        // Calcula ponto intermediário já percorrido no span total
         const progress=Math.min(sinceLastTx/animDur,1);
         const ease=1-Math.pow(1-progress,3);
-        const midLat=prev.lat+(v.lat-prev.lat)*ease;
-        const midLng=prev.lng+(v.lng-prev.lng)*ease;
+        const midLat=oldest.lat+(v.lat-oldest.lat)*ease;
+        const midLng=oldest.lng+(v.lng-oldest.lng)*ease;
         startInterp(mk, midLat, midLng, v.lat, v.lng, remaining);
       }
     }
@@ -1585,28 +1591,33 @@ async function load(){
       }
       if(!arr)arr=Object.values(raw).find(v=>Array.isArray(v))||[];
     }
-    // Salva posição ANTERIOR de cada veículo antes de sobrescrever allV
-    // (só sobrescreve se já existia entrada — preserva a posição realmente anterior)
+    // Salva posição atual no histórico ANTES de sobrescrever allV
+    // Mantém as últimas 4 posições por veículo (FIFO)
     allV.forEach(v=>{
+      const id=String(v.id);
       const ts=parseData(v.datahora);
-      _prevPos[String(v.id)]={lat:v.lat, lng:v.lng, ts:ts?ts.getTime():Date.now()};
+      const entry={lat:v.lat, lng:v.lng, ts:ts?ts.getTime():Date.now()};
+      if(!_histPos[id]) _histPos[id]=[];
+      const last=_histPos[id][_histPos[id].length-1];
+      if(!last || last.lat!==v.lat || last.lng!==v.lng || last.ts!==entry.ts){
+        _histPos[id].push(entry);
+        if(_histPos[id].length>4) _histPos[id].shift();
+      }
     });
 
     allV=norm(arr);
     filt=[...allV];
 
-    // Na primeira carga allV estava vazio, então _prevPos ficou vazio.
-    // Inicializa agora para todos os veículos que ainda não têm entrada,
-    // usando datahora - 60s como timestamp anterior estimado.
-    // Isso permite interpolação imediata mesmo na primeira seleção.
+    // Na primeira carga allV estava vazio — inicializa histPos para todos os veículos
     allV.forEach(v=>{
       const id=String(v.id);
-      if(!_prevPos[id]){
+      if(!_histPos[id] || _histPos[id].length===0){
         const ts=parseData(v.datahora);
         const currMs=ts?ts.getTime():Date.now();
-        // Estima posição anterior: mesmo ponto, 60s atrás
-        // A interpolação vai animar a partir da posição atual com base no sinceLastTx
-        _prevPos[id]={lat:v.lat, lng:v.lng, ts:currMs-60000};
+        _histPos[id]=[
+          {lat:v.lat, lng:v.lng, ts:currMs-60000},
+          {lat:v.lat, lng:v.lng, ts:currMs}
+        ];
       }
     });
 
