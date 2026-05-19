@@ -212,7 +212,7 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
 .ic-body{padding:12px 13px 13px;}
 .ic-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;}
 .ic-frota{font-size:14px;font-weight:800;color:#fff;letter-spacing:0.3px;}
-.ic-moto{font-size:10px;color:var(--text2);margin-top:2px;}
+.ic-moto{font-size:11px;font-weight:700;color:#c8dff0;margin-top:3px;letter-spacing:0.2px;}
 .ic-close{width:20px;height:20px;border-radius:5px;cursor:pointer;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--text3);font-size:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background 0.15s;}
 .ic-close:hover{background:rgba(255,255,255,0.12);}
 .ic-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px;}
@@ -1132,6 +1132,10 @@ function clearSelection(){
   document.getElementById('acClear').classList.remove('show');
   document.getElementById('acDrop').classList.remove('open');
   searchQ=''; selIdx=-1; activeFilter=null;
+  // Garante que filt reflete todos os veículos antes de renderizar e fazer fitAll
+  // (sem isso, zoom direto no mapa sem usar sidebar deixava filt vazio/parcial,
+  //  impedindo o botão "Total" de voltar a mostrar todos os veículos)
+  filt=[...allV];
   renderList();
   updateBadgeHighlight();
   // Volta a ver todos no mapa
