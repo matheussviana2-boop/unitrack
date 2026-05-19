@@ -641,7 +641,7 @@ var _needProxy=false;
 var _PROXY='';
 const API  =_API_BASE;
 const API2 =_needProxy?_PROXY+encodeURIComponent(_API2_BASE):_API2_BASE;
-/* Cache-busting: gera URL com timestamp para garantir dado fresco em qualquer proxy/CDN */
+/* Cache-busting: timestamp na URL garante dado fresco em qualquer proxy/CDN */
 function apiUrl(base){ return base+'?_='+Date.now(); }
 const RSEC=120;
 let mapL,cluster,singleLayer,layerStreet,layerSat,currentLayer='street';
@@ -1134,7 +1134,6 @@ function clearSelection(){
   document.getElementById('acClear').classList.remove('show');
   document.getElementById('acDrop').classList.remove('open');
   searchQ=''; selIdx=-1; activeFilter=null;
-  filt=[...allV];
   renderList();
   updateBadgeHighlight();
   // Volta a ver todos no mapa
@@ -1510,7 +1509,28 @@ async function load(){
       });
     }
     renderList();
-    if(!activeV)fitAll();
+    if(!activeV){
+      fitAll();
+    } else {
+      // Veículo selecionado: atualiza posição do marcador e card com dados frescos
+      // sem mover o mapa (flyTo seria perturbador a cada 2 min)
+      const fresh = allV.find(v => String(v.id) === String(activeV.id));
+      if(fresh){
+        const moved = fresh.lat !== activeV.lat || fresh.lng !== activeV.lng;
+        activeV = fresh; // atualiza referência com dados novos
+        const mk = mkrs[fresh.id];
+        if(mk){
+          mk.setLatLng([fresh.lat, fresh.lng]); // move marcador no mapa
+          if(moved){
+            // Só centraliza se o veículo realmente se moveu, suavemente
+            mapL.panTo([fresh.lat, fresh.lng], {animate:true, duration:0.6});
+          }
+        }
+        // Atualiza card com novos dados (velocidade, hodômetro, hora, etc.)
+        const card = document.getElementById('iCard');
+        if(card.classList.contains('vis')) positionCard(fresh);
+      }
+    }
     document.getElementById('ovL').classList.add('hidden');
     document.getElementById('ovE').classList.add('hidden');
   }catch(e){
