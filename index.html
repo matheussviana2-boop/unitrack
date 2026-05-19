@@ -852,7 +852,8 @@ function _routePoint(t){
 function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   stopInterp();
   const dist=_haversineKm(fromLat,fromLng,toLat,toLng);
-  if(dist<0.005 || dist>_MAX_INTERP_KM){
+  // Distância insignificante (<30m) ou GPS saltou longe demais → reposiciona sem animar
+  if(dist<0.03 || dist>_MAX_INTERP_KM){
     mk.setLatLng([toLat,toLng]);
     return;
   }
@@ -863,6 +864,8 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   _routePts=[];_routeDists=[];_routeTotal=0;
 
   /* Tenta buscar rota real pelo OSRM público
+     Só chama se distância >= 100m — abaixo disso o OSRM pode retornar
+     rotas circulares tentando ajustar para a malha viária mais próxima
      Timeout de 3s — se não responder, usa linha reta */
   const osrmUrl=`https://router.project-osrm.org/route/v1/driving/`
     +`${fromLng},${fromLat};${toLng},${toLat}`
@@ -871,7 +874,7 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   const ctrl=new AbortController();
   const tid=setTimeout(()=>ctrl.abort(),3000);
 
-  fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
+  if(dist>=0.1) fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
     .then(r=>r.json())
     .then(data=>{
       clearTimeout(tid);
@@ -1292,15 +1295,20 @@ function selectVehicle(v, fromMap){
   }
 
   if(isSame && fromMap){
-    // Mesmo veículo clicado no marcador → reabre o card
-    mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
-    setTimeout(()=>positionCard(v), 950);
+    // Mesmo veículo clicado no marcador → reabre o card sem mexer no rastro/animação
+    if(!card.classList.contains('vis')){
+      mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
+      setTimeout(()=>positionCard(v), 950);
+    } else {
+      card.classList.remove('vis');
+    }
     return;
   }
 
   // Novo veículo selecionado
   activeV = v;
   stopInterp();
+  clearTrail(); // limpa rastro do veículo anterior imediatamente
   document.querySelectorAll('.vi').forEach(e=>e.classList.remove('act'));
   const li = document.getElementById(`li-${v.id}`);
   if(li){li.classList.add('act');li.scrollIntoView({behavior:'smooth',block:'nearest'});}
@@ -1308,7 +1316,7 @@ function selectVehicle(v, fromMap){
   renderMkrs(v.id);
   card.classList.remove('vis');
   mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
-  drawTrail(v.id); // desenha rastro das últimas posições conhecidas
+  // rastro começa junto com a animação via startTrail — não precisa drawTrail aqui
   // Inicia interpolação imediata usando posição anterior guardada em _prevPos
   setTimeout(()=>{
     const prev=_prevPos[String(v.id)];
