@@ -1192,32 +1192,20 @@ function selectVehicle(v, fromMap){
   setTimeout(()=>{
     const prev=_prevPos[String(v.id)];
     const mk=mkrs[v.id];
-    const st=getStatus(v);
-    console.log('[Interp] id='+String(v.id)+' status='+st+' prev='+(prev?'sim':'NAO')+' mk='+(mk?'sim':'NAO'));
-    if(prev && mk && st==='green'){
+    if(prev && mk && getStatus(v)==='green'){
       const currTs=parseData(v.datahora);
       const currMs=currTs?currTs.getTime():Date.now();
-      const interval=currMs-prev.ts;
-      const sinceLastTx=Date.now()-currMs;
-      const animDur=Math.max(interval,_INTERP_MS);
-      const remaining=animDur-sinceLastTx;
-      const dist=_haversineKm(prev.lat,prev.lng,v.lat,v.lng);
-      console.log('[Interp] prev=('+prev.lat.toFixed(5)+','+prev.lng.toFixed(5)+')'
-        +' curr=('+v.lat.toFixed(5)+','+v.lng.toFixed(5)+')'
-        +' dist='+dist.toFixed(4)+'km'
-        +' interval='+Math.round(interval/1000)+'s'
-        +' sinceLastTx='+Math.round(sinceLastTx/1000)+'s'
-        +' remaining='+Math.round(remaining/1000)+'s'
-        +' datahora='+v.datahora);
+      const interval=currMs-prev.ts;          // intervalo entre as duas transmissões
+      const sinceLastTx=Date.now()-currMs;     // tempo decorrido desde a transmissão atual
+      const animDur=Math.max(interval,_INTERP_MS); // duração mínima de 55s
+      const remaining=animDur-sinceLastTx;     // tempo restante até o próximo update
       if(remaining>2000 && interval>1000){
+        // Calcula ponto intermediário já percorrido
         const progress=Math.min(sinceLastTx/animDur,1);
         const ease=1-Math.pow(1-progress,3);
         const midLat=prev.lat+(v.lat-prev.lat)*ease;
         const midLng=prev.lng+(v.lng-prev.lng)*ease;
-        console.log('[Interp] INICIANDO de ('+midLat.toFixed(5)+','+midLng.toFixed(5)+') por '+Math.round(remaining/1000)+'s');
         startInterp(mk, midLat, midLng, v.lat, v.lng, remaining);
-      } else {
-        console.warn('[Interp] BLOQUEADO — remaining='+Math.round(remaining/1000)+'s interval='+Math.round(interval/1000)+'s');
       }
     }
     positionCard(v);
@@ -1598,8 +1586,7 @@ async function load(){
       if(!arr)arr=Object.values(raw).find(v=>Array.isArray(v))||[];
     }
     // Salva posição ANTERIOR de cada veículo antes de sobrescrever allV
-    // Usa datahora real da transmissão como timestamp — permite calcular
-    // exatamente onde o veículo já deveria estar ao selecionar
+    // (só sobrescreve se já existia entrada — preserva a posição realmente anterior)
     allV.forEach(v=>{
       const ts=parseData(v.datahora);
       _prevPos[String(v.id)]={lat:v.lat, lng:v.lng, ts:ts?ts.getTime():Date.now()};
@@ -1607,6 +1594,21 @@ async function load(){
 
     allV=norm(arr);
     filt=[...allV];
+
+    // Na primeira carga allV estava vazio, então _prevPos ficou vazio.
+    // Inicializa agora para todos os veículos que ainda não têm entrada,
+    // usando datahora - 60s como timestamp anterior estimado.
+    // Isso permite interpolação imediata mesmo na primeira seleção.
+    allV.forEach(v=>{
+      const id=String(v.id);
+      if(!_prevPos[id]){
+        const ts=parseData(v.datahora);
+        const currMs=ts?ts.getTime():Date.now();
+        // Estima posição anterior: mesmo ponto, 60s atrás
+        // A interpolação vai animar a partir da posição atual com base no sinceLastTx
+        _prevPos[id]={lat:v.lat, lng:v.lng, ts:currMs-60000};
+      }
+    });
 
     renderList();
     if(!activeV){
