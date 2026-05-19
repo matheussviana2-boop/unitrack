@@ -1,4 +1,4 @@
-const CACHE_NAME = 'unitrack-v3';
+const CACHE_NAME = 'unitrack-v4';
 const STATIC_ASSETS = ['/', '/index.html', '/manifest.json', '/icons/icon-192x192.png', '/icons/icon-512x512.png'];
 
 self.addEventListener('install', event => {
@@ -11,8 +11,6 @@ self.addEventListener('activate', event => {
   self.clients.claim();
 });
 
-// ── Responde ao SKIP_WAITING enviado pelo index.html quando há atualização pronta
-// Permite que a nova versão assuma o controle imediatamente, sem fechar o app
 self.addEventListener('message', event => {
   if(event.data && event.data.type === 'SKIP_WAITING'){
     self.skipWaiting();
@@ -22,14 +20,19 @@ self.addEventListener('message', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // NUNCA cachear chamadas de API — sempre busca da rede com headers anti-cache
-  if(url.pathname.startsWith('/api/') ||
-     url.pathname.includes('/posicao') ||
-     url.pathname.includes('/viagens') ||
-     url.href.includes('aefsistemas') ||
-     url.href.includes('brasilsat') ||
-     url.href.includes('nominatim') ||
-     url.href.includes('arcgis')){
+  // NUNCA cachear — sempre vai à rede
+  const isNoCache =
+    url.pathname.startsWith('/api/') ||
+    url.pathname.includes('/posicao') ||
+    url.pathname.includes('/viagens') ||
+    url.href.includes('aefsistemas') ||
+    url.href.includes('brasilsat') ||
+    url.href.includes('nominatim') ||
+    url.href.includes('arcgis') ||
+    url.href.includes('osrm') ||           // roteamento OSRM — nunca cachear
+    url.href.includes('project-osrm');     // fallback para o domínio completo
+
+  if(isNoCache){
     event.respondWith(
       fetch(event.request, {
         cache: 'no-store',

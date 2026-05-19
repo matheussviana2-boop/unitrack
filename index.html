@@ -645,7 +645,8 @@ const API2 =_needProxy?_PROXY+encodeURIComponent(_API2_BASE):_API2_BASE;
 function apiUrl(base){ return base+'?_='+Date.now(); }
 const RSEC=60;
 let mapL,cluster,singleLayer,layerStreet,layerSat,currentLayer='street';
-let trailLayer=null; // layerGroup dedicado ao rastro — z-index fixo acima dos tiles
+let trailLayer=null; // layerGroup dedicado ao rastro
+let _trailRenderer=null; // renderer SVG explícito — mais compatível mobile/WebKit
 let allV=[],filt=[],mkrs={},cdInt=null,cd=RSEC,activeV=null,searchQ='',selIdx=-1;
 /* ── INTERPOLAÇÃO ── */
 let _interpInt=null;    // setInterval da animação
@@ -954,8 +955,7 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
 
 /* Remove tudo do rastro do mapa */
 function clearTrail(){
-  if(!trailLayer) return;
-  trailLayer.clearLayers();
+  if(trailLayer) trailLayer.clearLayers();
   _trailLine=null;
   _trailLines=[];
   _trailPts=[];
@@ -963,37 +963,64 @@ function clearTrail(){
 
 /* Inicia nova linha viva do ponto fromLat/Lng
    Chamado no início de cada animação */
+function _ensureTrailLayer(){
+  // Inicialização defensiva — garante que trailLayer existe mesmo se initMap demorou
+  if(trailLayer) return;
+  if(!mapL) return;
+  if(!mapL.getPane('trailPane')){
+    mapL.createPane('trailPane');
+    mapL.getPane('trailPane').style.zIndex = 350;
+    mapL.getPane('trailPane').style.pointerEvents = 'none';
+  }
+  _trailRenderer = L.svg({pane:'trailPane'});
+  trailLayer = L.layerGroup([], {pane:'trailPane'}).addTo(mapL);
+}
+
 function startTrail(fromLat, fromLng){
+  _ensureTrailLayer();
   if(!trailLayer) return;
-  const opts={color:'#00e676', weight:5, lineCap:'round', lineJoin:'round', pane:'trailPane'};
-  // Congela a linha anterior como segmento estático com opacidade baixa
+  const opts={
+    color:'#00e676', weight:6,
+    lineCap:'round', lineJoin:'round',
+    pane:'trailPane',
+    renderer:_trailRenderer
+  };
+  // Congela linha anterior como segmento estático
   if(_trailLine){
     trailLayer.removeLayer(_trailLine);
-    const frozen=L.polyline(_trailPts, {...opts, opacity:0.35}).addTo(trailLayer);
+    const frozen=L.polyline([..._trailPts], {...opts, opacity:0.35}).addTo(trailLayer);
     _trailLines.push(frozen);
-    // Mantém só 1 segmento estático
     if(_trailLines.length>1){
       trailLayer.removeLayer(_trailLines[0]);
       _trailLines.shift();
     }
+    _trailLine=null;
   }
   // Nova linha viva
   _trailPts=[[fromLat, fromLng]];
-  _trailLine=L.polyline(_trailPts, {...opts, opacity:1.0}).addTo(trailLayer);
+  _trailLine=L.polyline([..._trailPts], {...opts, opacity:1.0}).addTo(trailLayer);
 }
 
 /* Adiciona ponto à linha viva — chamado a cada tick da animação */
 function updateTrail(lat, lng){
-  if(!_trailLine) return;
-  // Só adiciona ponto se moveu pelo menos 5m do último ponto do rastro
-  // Evita pontos redundantes que pesam no mobile
+  if(!_trailLine || !trailLayer) return;
+  // Filtra pontos muito próximos (~5m) para não sobrecarregar
   const last=_trailPts[_trailPts.length-1];
   if(last){
     const dlat=Math.abs(lat-last[0]), dlng=Math.abs(lng-last[1]);
-    if(dlat<0.00005 && dlng<0.00005) return; // ~5m — ignora
+    if(dlat<0.00005 && dlng<0.00005) return;
   }
   _trailPts.push([lat, lng]);
-  _trailLine.setLatLngs(_trailPts);
+  // Reconstrói polyline completamente — mais confiável no mobile/WebKit
+  // que chamar setLatLngs numa instância existente
+  const opts={
+    color:'#00e676', weight:6,
+    lineCap:'round', lineJoin:'round',
+    pane:'trailPane',
+    renderer:_trailRenderer
+  };
+  trailLayer.removeLayer(_trailLine);
+  _trailLine=L.polyline([..._trailPts], {...opts, opacity:1.0}).addTo(trailLayer);
 }
 
 /* drawTrail: compatibilidade — chamado ao selecionar veículo
@@ -1045,12 +1072,13 @@ function initMap(){
       });
     }
   });
-  // Cria pane dedicado para o rastro — z-index 350 fica entre tiles (200) e marcadores (400)
-  // Garante visibilidade no mobile onde canvas layers têm ordem diferente
+  // Pane dedicado para o rastro — z-index 350 (entre tiles 200 e marcadores 400)
   mapL.createPane('trailPane');
   mapL.getPane('trailPane').style.zIndex = 350;
   mapL.getPane('trailPane').style.pointerEvents = 'none';
-  trailLayer = L.layerGroup().addTo(mapL);
+  // SVG renderer explícito — mais compatível com mobile/WebKit que o canvas padrão
+  _trailRenderer = L.svg({pane:'trailPane'});
+  trailLayer = L.layerGroup([], {pane:'trailPane'}).addTo(mapL);
 
   singleLayer=L.layerGroup().addTo(mapL);
   mapL.addLayer(cluster);
