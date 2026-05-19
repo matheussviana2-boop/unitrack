@@ -665,6 +665,10 @@ let _trailLine=null;   // L.polyline atual
 let _trailPts=[];      // array de latlngs da linha atual
 /* _trailLines: segmentos das transmissões anteriores (estáticos) */
 let _trailLines=[];
+/* _routePts: pontos da rota OSRM para animação — substitui linha reta */
+let _routePts=[];      // [{lat,lng},...] pontos do caminho real
+let _routeDists=[];    // distâncias acumuladas entre pontos (para interpolação)
+let _routeTotal=0;     // distância total da rota
 /* linhaMap: frota -> { nomeLinha, statusLinha } */
 let linhaMap={};
 /* Filtro ativo por status ao clicar no badge ('green'|'yellow'|'dark'|null) */
@@ -826,10 +830,28 @@ function stopInterp(){
 
 /* Inicia interpolação do marcador mk de (fromLat,fromLng) → (toLat,toLng)
    dur: duração em ms (padrão _INTERP_MS) — permite começar no meio do caminho */
+/* Interpola ao longo dos pontos da rota OSRM
+   dado t (0→1), retorna {lat,lng} no caminho real */
+function _routePoint(t){
+  if(!_routePts.length) return null;
+  const d=t*_routeTotal;
+  for(let i=0;i<_routeDists.length-1;i++){
+    if(d<=_routeDists[i+1]){
+      const seg=_routeDists[i+1]-_routeDists[i];
+      const f=seg>0?(d-_routeDists[i])/seg:0;
+      return {
+        lat:_routePts[i].lat+(_routePts[i+1].lat-_routePts[i].lat)*f,
+        lng:_routePts[i].lng+(_routePts[i+1].lng-_routePts[i].lng)*f
+      };
+    }
+  }
+  return _routePts[_routePts.length-1];
+}
+
+/* Inicia animação — tenta buscar rota OSRM, fallback para linha reta */
 function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   stopInterp();
   const dist=_haversineKm(fromLat,fromLng,toLat,toLng);
-  // Parado ou GPS pulou longe demais → só reposiciona, sem animar
   if(dist<0.005 || dist>_MAX_INTERP_KM){
     mk.setLatLng([toLat,toLng]);
     return;
@@ -838,16 +860,54 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
   _interpTo  ={lat:toLat,  lng:toLng};
   _interpT0  =Date.now();
   _interpDur =dur||_INTERP_MS;
-  // Inicia linha viva do ponto de partida
+  _routePts=[];_routeDists=[];_routeTotal=0;
+
+  /* Tenta buscar rota real pelo OSRM público
+     Timeout de 3s — se não responder, usa linha reta */
+  const osrmUrl=`https://router.project-osrm.org/route/v1/driving/`
+    +`${fromLng},${fromLat};${toLng},${toLat}`
+    +`?overview=full&geometries=geojson`;
+
+  const ctrl=new AbortController();
+  const tid=setTimeout(()=>ctrl.abort(),3000);
+
+  fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
+    .then(r=>r.json())
+    .then(data=>{
+      clearTimeout(tid);
+      const coords=data?.routes?.[0]?.geometry?.coordinates;
+      if(coords && coords.length>=2){
+        // OSRM retorna [lng,lat] — converte para {lat,lng}
+        _routePts=coords.map(c=>({lat:c[1],lng:c[0]}));
+        // Calcula distâncias acumuladas para interpolação fiel
+        _routeDists=[0];
+        for(let i=1;i<_routePts.length;i++){
+          _routeDists.push(_routeDists[i-1]+
+            _haversineKm(_routePts[i-1].lat,_routePts[i-1].lng,
+                         _routePts[i].lat,_routePts[i].lng));
+        }
+        _routeTotal=_routeDists[_routeDists.length-1];
+      }
+    })
+    .catch(()=>{ clearTimeout(tid); /* fallback linha reta */ });
+
+  // Inicia linha viva imediatamente (vai sendo atualizada com os pontos da rota)
   if(activeV) startTrail(fromLat, fromLng);
+
   _interpInt=setInterval(()=>{
     const t=Math.min((Date.now()-_interpT0)/_interpDur,1);
-    const ease=t; // linear — velocidade constante
-    const lat=_interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*ease;
-    const lng=_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*ease;
-    mk.setLatLng([lat, lng]);
-    // Atualiza rastro junto com o marcador
-    if(activeV) updateTrail(lat, lng);
+    let lat,lng;
+    if(_routePts.length>=2){
+      // Usa rota real do OSRM
+      const pt=_routePoint(t);
+      lat=pt.lat; lng=pt.lng;
+    } else {
+      // Fallback: linha reta enquanto OSRM não respondeu
+      lat=_interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*t;
+      lng=_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*t;
+    }
+    mk.setLatLng([lat,lng]);
+    if(activeV) updateTrail(lat,lng);
     if(t>=1) stopInterp();
   },100);
 }
