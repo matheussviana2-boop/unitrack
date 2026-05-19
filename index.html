@@ -868,23 +868,54 @@ function clearTrail(){
 function drawTrail(id){
   clearTrail();
   const trail=_trailPos[String(id)];
-  if(!trail || trail.length<2) return;
-  // Desenha N-1 segmentos com opacidade crescente
-  // Segmento mais antigo: quase transparente; mais recente: opaco
-  for(let i=0;i<trail.length-1;i++){
-    const opacity=0.15+(0.7*(i/(trail.length-2))); // 0.15 → 0.85
+  if(!trail || trail.length<1) return;
+  const n=trail.length;
+
+  // Com 1 ponto: só marca o ponto anterior — já indica de onde veio
+  // Com 2+ pontos: segmentos com opacidade crescente (mais fraco atrás, opaco na frente)
+  for(let i=0;i<n-1;i++){
+    // t=0 no segmento mais antigo, t=1 no mais recente
+    const t = n<3 ? 1 : i/(n-2);
+    const opacity = 0.55 + (0.45*t); // 0.55 → 1.0 — sempre bem visível
     const line=L.polyline(
       [[trail[i].lat,trail[i].lng],[trail[i+1].lat,trail[i+1].lng]],
-      {color:'#00e676', weight:4, opacity:opacity, lineCap:'round', lineJoin:'round'}
+      {color:'#00e676', weight:6, opacity:opacity, lineCap:'round', lineJoin:'round'}
     ).addTo(mapL);
     _trailLines.push(line);
   }
-  // Ponto inicial (mais antigo) — marca o começo do rastro
+
+  // Ponto de origem — círculo branco com borda verde para contrastar no mapa
   const first=trail[0];
   const dot=L.circleMarker([first.lat,first.lng],
-    {radius:4, color:'#00e676', fillColor:'#00e676', fillOpacity:0.3, opacity:0.3, weight:2}
+    {radius:5, color:'#00e676', fillColor:'#ffffff', fillOpacity:0.9, opacity:1, weight:2.5}
   ).addTo(mapL);
   _trailLines.push(dot);
+
+  // Seta de direção no último segmento (se tiver 2+ pontos)
+  // Indica visualmente para onde o veículo está indo
+  if(n>=2){
+    const a=trail[n-2], b=trail[n-1];
+    const angle=Math.atan2(b.lng-a.lng, b.lat-a.lat)*(180/Math.PI);
+    const arrow=L.marker([b.lat,b.lng],{
+      icon:L.divIcon({
+        className:'',
+        html:`<div style="
+          width:0;height:0;
+          border-left:6px solid transparent;
+          border-right:6px solid transparent;
+          border-bottom:12px solid #00e676;
+          transform:rotate(${angle}deg);
+          transform-origin:center bottom;
+          filter:drop-shadow(0 0 3px rgba(0,230,118,0.8));
+        "></div>`,
+        iconSize:[12,12],
+        iconAnchor:[6,6]
+      }),
+      interactive:false,
+      zIndexOffset:1000
+    }).addTo(mapL);
+    _trailLines.push(arrow);
+  }
 }
 
 /* ── MAP ── */
