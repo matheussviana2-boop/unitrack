@@ -661,6 +661,9 @@ const _MAX_INTERP_KM=2; // distância máxima para interpolar (acima = falha de 
 /* _prevPos: última posição de cada veículo antes do update atual — para interpolação
    Formato: { [v.id]: { lat, lng, ts } } */
 let _prevPos={};
+/* _dirAngle: último ângulo de direção calculado por veículo (graus)
+   Formato: { [v.id]: graus } — atualizado quando lat/lng muda */
+let _dirAngle={};
 /* _trailPos: últimas 2 transmissões com posição diferente por veículo
    Formato: { [v.id]: [{lat,lng}, {lat,lng}] } — máx 2 pares */
 let _trailPos={};
@@ -751,13 +754,14 @@ function sidebarCircleIcon(color, sz){
 }
 
 /* Ícone mapa: pin gota colorido + ônibus PNG dentro */
-function busMapIcon(color, active, ghost){
+function busMapIcon(color, active, ghost, angle){
   active = active || false;
   ghost  = ghost  || false;
+  angle  = (angle !== undefined && angle !== null) ? angle : null;
   var W   = active ? 48 : 38;
   var H   = Math.round(W * 1.38);
-  var cr  = W * 0.355;   /* raio círculo branco */
-  var cy  = W * 0.425;   /* centro Y */
+  var cr  = W * 0.355;
+  var cy  = W * 0.425;
   var op  = ghost ? '0.28' : '1';
   var c   = color || '#5a7a8a';
   var busSz = Math.round(cr * 1.55);
@@ -770,9 +774,27 @@ function busMapIcon(color, active, ghost){
       +'<circle cx="'+(W/2)+'" cy="'+cy+'" r="'+(cr+13)+'" fill="none" stroke="'+c+'" stroke-width="1" opacity="0.18"/>'
     : '';
 
-  /* SVG do pin com foreignObject para o PNG */
-  var svg = '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg">'
-    +'<ellipse cx="'+(W/2)+'" cy="'+(H-2)+'" rx="'+(W*0.17)+'" ry="'+(W*0.055)+'" fill="rgba(0,0,0,0.18)"/>'
+  /* Seta de direção — aparece abaixo do pin quando angle disponível
+     Triângulo apontando na direção do deslocamento, rotacionado pelo angle */
+  var arrowSz = W * 0.42;
+  var arrowY  = H - 2;  /* posição Y da ponta inferior do pin */
+  var arrow = '';
+  if(angle !== null){
+    /* cx/cy do ponto de ancoragem da seta (ponta do pin) */
+    var ax = W / 2;
+    var ay = arrowY;
+    /* seta: triângulo pequeno, rotacionado, apontando na direção de deslocamento */
+    arrow = '<g transform="translate('+ax+','+ay+') rotate('+angle+')">'
+      /* corpo da seta */
+      +'<polygon points="0,-'+(arrowSz*0.9)+' -'+(arrowSz*0.45)+','+(arrowSz*0.5)+' 0,'+(arrowSz*0.18)+' '+(arrowSz*0.45)+','+(arrowSz*0.5)+'"'
+      +' fill="'+c+'" opacity="0.85" stroke="white" stroke-width="1" stroke-linejoin="round"/>'
+      +'</g>';
+  }
+
+  /* SVG do pin */
+  var totalH = angle !== null ? H + arrowSz * 0.9 : H;
+  var svg = '<svg width="'+W+'" height="'+totalH+'" viewBox="0 0 '+W+' '+totalH+'" xmlns="http://www.w3.org/2000/svg">'
+    +'<ellipse cx="'+(W/2)+'" cy="'+arrowY+'" rx="'+(W*0.17)+'" ry="'+(W*0.055)+'" fill="rgba(0,0,0,0.18)"/>'
     +ring
     +'<path d="M'+(W/2)+' 2'
       +' C'+(W*0.26)+' 2 '+(W*0.08)+' '+(H*0.16)+' '+(W*0.08)+' '+cy
@@ -783,10 +805,10 @@ function busMapIcon(color, active, ghost){
     +'<path d="M'+(W*0.34)+' '+(H*0.09)+' C'+(W*0.24)+' '+(H*0.14)+' '+(W*0.17)+' '+(H*0.24)+' '+(W*0.17)+' '+(cy*0.73)+'"'
       +' fill="none" stroke="rgba(255,255,255,0.32)" stroke-width="'+(W*0.058)+'" stroke-linecap="round"/>'
     +'<circle cx="'+(W/2)+'" cy="'+cy+'" r="'+cr+'" fill="#ffffff"/>'
+    +arrow
     +'</svg>';
 
-  /* Usa div com posicionamento para sobrepor o PNG ao SVG */
-  var html = '<div style="position:relative;width:'+W+'px;height:'+H+'px;opacity:'+op+';line-height:0;">'
+  var html = '<div style="position:relative;width:'+W+'px;height:'+totalH+'px;opacity:'+op+';line-height:0;">'
     +svg
     +'<img src="'+BUS_PNG+'" '
     +'style="position:absolute;left:'+bx+'px;top:'+by+'px;width:'+busSz+'px;height:'+busSz+'px;display:block;" '
@@ -796,8 +818,8 @@ function busMapIcon(color, active, ghost){
   return L.divIcon({
     html: html,
     className: '',
-    iconSize:   [W, H],
-    iconAnchor: [W/2, H-2]
+    iconSize:   [W, totalH],
+    iconAnchor: [W/2, arrowY]
   });
 }
 
@@ -982,7 +1004,7 @@ function _ensureTrailLayer(){
    - Reconstrói polyline a cada tick (mais confiável no mobile)
 ══════════════════════════════════════════════════════ */
 
-const _TRAIL_WINDOW_MS = 15000; // mantém só os últimos 15s de movimento
+const _TRAIL_WINDOW_MS = 5000; // mantém só os últimos 5s de movimento
 
 function startTrail(fromLat, fromLng){
   _ensureTrailLayer();
@@ -1371,7 +1393,7 @@ function renderMkrs(highlightId=null){
     const vSel=filt.find(v=>String(v.id)===String(highlightId));
     if(vSel){
       const st=getStatus(vSel);const color=ST_COLOR[st];
-      const icon=busMapIcon(color,true,false);
+      const icon=busMapIcon(color,true,false,_dirAngle[String(vSel.id)]!==undefined?_dirAngle[String(vSel.id)]:null);
       const curLat=(_interpFrom&&_interpTo)?_interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*Math.min((Date.now()-_interpT0)/_interpDur,1):vSel.lat;
       const curLng=(_interpFrom&&_interpTo)?_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*Math.min((Date.now()-_interpT0)/_interpDur,1):vSel.lng;
       const m=L.marker([curLat,curLng],{icon,zIndexOffset:1000});
@@ -1381,7 +1403,7 @@ function renderMkrs(highlightId=null){
   }else{
     filt.forEach(v=>{
       const st=getStatus(v);const color=ST_COLOR[st];
-      const m=L.marker([v.lat,v.lng],{icon:busMapIcon(color,false,false)});
+      const m=L.marker([v.lat,v.lng],{icon:busMapIcon(color,false,false,_dirAngle[String(v.id)]!==undefined?_dirAngle[String(v.id)]:null)});
       m.on('click',()=>selectVehicle(v,true));
       cluster.addLayer(m);mkrs[v.id]=m;
     });
@@ -1805,10 +1827,20 @@ async function load(){
       }
       if(!arr)arr=Object.values(raw).find(v=>Array.isArray(v))||[];
     }
-    // Salva posição anterior (para interpolação) e atualiza rastro (para trail)
+    // Salva posição anterior e calcula ângulo de direção quando posição muda
     allV.forEach(v=>{
       const id=String(v.id);
       const ts=parseData(v.datahora);
+      const prev=_prevPos[id];
+      // Calcula ângulo de direção se posição mudou (em graus, 0=norte)
+      if(prev && (prev.lat!==v.lat || prev.lng!==v.lng)){
+        // atan2 retorna ângulo cartesiano — converte para bearing geográfico
+        const dLat=v.lat-prev.lat;
+        const dLng=v.lng-prev.lng;
+        // bearing: 0=norte, 90=leste, 180=sul, 270=oeste
+        const bearing = Math.atan2(dLng, dLat) * (180/Math.PI);
+        _dirAngle[id]=bearing;
+      }
       // _prevPos: posição atual vira "anterior" antes do allV ser sobrescrito
       _prevPos[id]={lat:v.lat, lng:v.lng, ts:ts?ts.getTime():Date.now()};
       // _trailPos: guarda últimas 2 posições distintas por veículo
@@ -1983,6 +2015,41 @@ if('serviceWorker' in navigator){
       .catch(function(e){console.warn('[SW] Falha:',e);});
   });
 }
+</script>
+<!-- ═══ DEBUG MODE — REMOVER DEPOIS ═══ -->
+<script src="https://unpkg.com/vconsole@latest/dist/vconsole.min.js"></script>
+<script>
+window.addEventListener('load', () => {
+  if(typeof VConsole === 'undefined') return;
+  const vc = new VConsole({ theme: 'dark' });
+  
+  // Log inicial do estado da app
+  setTimeout(() => {
+    console.log('═══ ESTADO DA APP ═══');
+    console.log('INTERP_MS:', typeof _INTERP_MS !== 'undefined' ? _INTERP_MS : 'INDEFINIDO');
+    console.log('TRAIL_WINDOW:', typeof _TRAIL_WINDOW_MS !== 'undefined' ? _TRAIL_WINDOW_MS : 'INDEFINIDO');
+    console.log('cleaner existe:', typeof _ensureTrailCleaner === 'function');
+    console.log('cleaner ativo:', typeof _trailCleanerInt !== 'undefined' && _trailCleanerInt !== null);
+    console.log('trail pts:', typeof _trailPts !== 'undefined' ? _trailPts.length : 'N/A');
+    console.log('routePts:', typeof _routePts !== 'undefined' ? _routePts.length : 'N/A');
+  }, 2000);
+  
+  // Intercepta fetch para ver OSRM
+  const _origFetch = window.fetch;
+  window.fetch = function(url, opts){
+    const u = String(url);
+    if(u.includes('osrm')) console.log('[OSRM] CHAMADO:', u.substr(0, 120));
+    return _origFetch.call(this, url, opts);
+  };
+  
+  // Auto-log a cada 5s do estado do rastro
+  setInterval(() => {
+    if(typeof _trailPts !== 'undefined' && _trailPts.length > 0){
+      const ages = _trailPts.map(p => Math.round((Date.now()-p.ts)/1000));
+      console.log('[RASTRO] pts=' + _trailPts.length + ' idades(s)=' + ages.join(','));
+    }
+  }, 5000);
+});
 </script>
 </body>
 </html>
