@@ -650,29 +650,19 @@ let mapL,cluster,singleLayer,layerStreet,layerSat,currentLayer='street';
 let trailLayer=null; // layerGroup dedicado ao rastro
 let _trailRenderer=null; // renderer SVG explícito — mais compatível mobile/WebKit
 let allV=[],filt=[],mkrs={},cdInt=null,cd=RSEC,activeV=null,searchQ='',selIdx=-1;
-/* ── INTERPOLAÇÃO ── */
-let _interpInt=null;    // setInterval da animação
-let _interpFrom=null;   // {lat,lng} ponto de partida
-let _interpTo=null;     // {lat,lng} ponto de destino
-let _interpT0=null;     // timestamp de início
-let _interpDur=null;    // duração total da animação em ms
-const _INTERP_MS=10000; // duração padrão da animação entre transmissões
-const _MAX_INTERP_KM=2; // distância máxima para interpolar (acima = falha de GPS)
-/* _prevPos: última posição de cada veículo antes do update atual — para interpolação
-   Formato: { [v.id]: { lat, lng, ts } } */
+/* ── MODO TELETRANSPORTE + CAUDA CURTA ──
+   Sem interpolação animada: marcador teletransporta para a nova posição
+   a cada update da BrasilSat. Veículo selecionado: câmera acompanha
+   (setView sem animação) e cauda curta é redesenhada do buffer histórico. */
+const _MAX_JUMP_KM=2; // distância de segurança — acima disso, ainda teleporta mas não desenha cauda (provável falha de GPS)
+/* _prevPos: última posição conhecida de cada veículo */
 let _prevPos={};
-/* _trailPos: últimas 2 transmissões com posição diferente por veículo
-   Formato: { [v.id]: [{lat,lng}, {lat,lng}] } — máx 2 pares */
+/* _trailPos: últimas 3 transmissões com posição DIFERENTE por veículo
+   Formato: { [v.id]: [{lat,lng}, {lat,lng}, {lat,lng}] } — mais antiga → mais recente */
 let _trailPos={};
-/* Polilinha viva — cresce junto com a animação do marcador */
-let _trailLine=null;   // L.polyline atual
-let _trailPts=[];      // array de latlngs da linha atual
-/* _trailLines: segmentos das transmissões anteriores (estáticos) */
-let _trailLines=[];
-/* _routePts: pontos da rota OSRM para animação — substitui linha reta */
-let _routePts=[];      // [{lat,lng},...] pontos do caminho real
-let _routeDists=[];    // distâncias acumuladas entre pontos (para interpolação)
-let _routeTotal=0;     // distância total da rota
+const _TRAIL_MAX=3; // buffer de posições por veículo
+/* Segmentos da cauda atualmente desenhados (cada um é uma L.polyline) */
+let _trailSegments=[];
 /* linhaMap: frota -> { nomeLinha, statusLinha } */
 let linhaMap={};
 /* Filtro ativo por status ao clicar no badge ('green'|'yellow'|'dark'|null) */
@@ -853,116 +843,42 @@ function _haversineKm(lat1,lng1,lat2,lng2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-/* Para a interpolação em curso */
-function stopInterp(){
-  if(_interpInt){ clearInterval(_interpInt); _interpInt=null; }
-  _interpFrom=null; _interpTo=null; _interpT0=null; _interpDur=null;
-}
+/* ══════════════════════════════════════════════════════
+   MOVIMENTO DO MARCADOR — TELETRANSPORTE
+   - Sem interpolação animada
+   - A cada update da BrasilSat, o marcador "salta" para a nova posição
+   - Stub stopInterp() mantido por compatibilidade com chamadas existentes
+══════════════════════════════════════════════════════ */
+function stopInterp(){ /* noop — modo teletransporte não tem animação em curso */ }
 
-/* Inicia interpolação do marcador mk de (fromLat,fromLng) → (toLat,toLng)
-   dur: duração em ms (padrão _INTERP_MS) — permite começar no meio do caminho */
-/* Interpola ao longo dos pontos da rota OSRM
-   dado t (0→1), retorna {lat,lng} no caminho real */
-function _routePoint(t){
-  if(!_routePts.length) return null;
-  const d=t*_routeTotal;
-  for(let i=0;i<_routeDists.length-1;i++){
-    if(d<=_routeDists[i+1]){
-      const seg=_routeDists[i+1]-_routeDists[i];
-      const f=seg>0?(d-_routeDists[i])/seg:0;
-      return {
-        lat:_routePts[i].lat+(_routePts[i+1].lat-_routePts[i].lat)*f,
-        lng:_routePts[i].lng+(_routePts[i+1].lng-_routePts[i].lng)*f
-      };
-    }
-  }
-  return _routePts[_routePts.length-1];
-}
-
-/* Inicia animação — tenta buscar rota OSRM, fallback para linha reta */
+/* Teletransporta o marcador para (toLat,toLng) sem animação.
+   Mantém a assinatura antiga (fromLat/fromLng ignorados) para não quebrar chamadas. */
 function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
-  stopInterp();
-  const dist=_haversineKm(fromLat,fromLng,toLat,toLng);
-  // <30m ou >2km → não anima, só reposiciona (parado ou GPS com falha)
-  if(dist<0.03 || dist>_MAX_INTERP_KM){
-    mk.setLatLng([toLat,toLng]);
-    return;
-  }
-  _interpFrom={lat:fromLat,lng:fromLng};
-  _interpTo  ={lat:toLat,  lng:toLng};
-  _interpT0  =Date.now();
-  _interpDur =dur||_INTERP_MS;
-  _routePts=[];_routeDists=[];_routeTotal=0;
-
-  // OSRM só para distâncias >= 200m (abaixo disso linha reta é imperceptível)
-  if(dist>=0.2){
-    const osrmUrl='https://router.project-osrm.org/route/v1/driving/'
-      +fromLng+','+fromLat+';'+toLng+','+toLat
-      +'?overview=full&geometries=geojson';
-    const ctrl=new AbortController();
-    const tid=setTimeout(()=>ctrl.abort(),3000);
-    fetch(osrmUrl,{signal:ctrl.signal,cache:'no-store'})
-      .then(r=>r.json())
-      .then(data=>{
-        clearTimeout(tid);
-        const coords=data && data.routes && data.routes[0] && data.routes[0].geometry && data.routes[0].geometry.coordinates;
-        if(!coords || coords.length<2) return;
-        const pts=coords.map(c=>({lat:c[1],lng:c[0]}));
-        let rd=[0];
-        for(let i=1;i<pts.length;i++){
-          rd.push(rd[i-1]+_haversineKm(pts[i-1].lat,pts[i-1].lng,pts[i].lat,pts[i].lng));
-        }
-        const rLen=rd[rd.length-1];
-        // Filtro anti-looping: rejeita rota > 3x distância direta
-        if(rLen>dist*3){
-          console.warn('[OSRM] rejeitado: rota',rLen.toFixed(2)+'km vs direto',dist.toFixed(2)+'km');
-          return;
-        }
-        _routePts=pts;_routeDists=rd;_routeTotal=rLen;
-        console.log('[OSRM] ok',pts.length,'pts',rLen.toFixed(2)+'km');
-      })
-      .catch(e=>{ clearTimeout(tid); console.warn('[OSRM] falhou:',e&&e.message); });
-  }
-
-  if(activeV) startTrail(fromLat, fromLng);
-
-  _interpInt=setInterval(()=>{
-    const t=Math.min((Date.now()-_interpT0)/_interpDur,1);
-    let lat,lng;
-    if(_routePts.length>=2){
-      const pt=_routePoint(t);
-      lat=pt.lat; lng=pt.lng;
-    } else {
-      lat=_interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*t;
-      lng=_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*t;
-    }
-    mk.setLatLng([lat,lng]);
-    if(activeV) updateTrail(lat,lng);
-    if(t>=1) stopInterp();
-  },100); // 10fps — suave no mobile, leve no processamento
+  if(!mk) return;
+  mk.setLatLng([toLat, toLng]);
 }
 
 /* ══════════════════════════════════════════════════════
-   RASTRO DO VEÍCULO
-   - Linha "viva" que cresce junto com a animação
-   - Mantém apenas as 2 últimas transmissões
-   - Segmento anterior: opacidade 0.35 (apagado)
-   - Segmento atual (animando): opacidade 1.0 (vivo)
-   - Some ao desselecionar
+   CAUDA CURTA DO VEÍCULO SELECIONADO
+   - Desenha até 3 segmentos com opacidade decrescente
+     (mais antigo = mais apagado, mais recente = mais vivo)
+   - Aparece SÓ para veículo selecionado E com status verde (ligado)
+   - Veículo parado/sem movimento desde o último update: sem cauda
+   - Redesenhada do buffer _trailPos a cada seleção e a cada update
 ══════════════════════════════════════════════════════ */
 
-/* Remove tudo do rastro do mapa */
+/* Remove a cauda do mapa */
 function clearTrail(){
-  if(trailLayer) trailLayer.clearLayers();
-  _trailLine=null;
-  _trailLines=[];
-  _trailPts=[];
+  if(!trailLayer){ _trailSegments=[]; return; }
+  _trailSegments.forEach(seg=>{
+    try{ trailLayer.removeLayer(seg); }catch(e){}
+  });
+  _trailSegments=[];
+  if(trailLayer.clearLayers) trailLayer.clearLayers();
 }
 
-/* Inicia nova linha viva do ponto fromLat/Lng
-   Chamado no início de cada animação */
+/* Garante que a camada do rastro existe (defensivo, caso initMap demore) */
 function _ensureTrailLayer(){
-  // Inicialização defensiva — garante que trailLayer existe mesmo se initMap demorou
   if(trailLayer) return;
   if(!mapL) return;
   if(!mapL.getPane('trailPane')){
@@ -974,72 +890,62 @@ function _ensureTrailLayer(){
   trailLayer = L.layerGroup([], {pane:'trailPane'}).addTo(mapL);
 }
 
-/* ══════════════════════════════════════════════════════
-   RASTRO COM JANELA DESLIZANTE DE 5 SEGUNDOS
-   - Cada ponto tem timestamp
-   - Pontos com idade > 5s são removidos automaticamente
-   - Rastro nunca fica longo nem polui o mapa
-   - Reconstrói polyline a cada tick (mais confiável no mobile)
-══════════════════════════════════════════════════════ */
-
-const _TRAIL_WINDOW_MS = 15000; // mantém só os últimos 15s de movimento
-
-function startTrail(fromLat, fromLng){
+/* Desenha a cauda a partir do buffer _trailPos[id].
+   pts: array de {lat,lng} do mais antigo ao mais recente (≥ 2 itens).
+   Cada segmento ganha opacidade crescente (mais novo = mais opaco). */
+function _drawTrailFromBuffer(pts){
   _ensureTrailLayer();
-  if(!trailLayer) return;
-  // Limpa rastro anterior completamente
-  if(_trailLine){ trailLayer.removeLayer(_trailLine); _trailLine=null; }
-  if(trailLayer.clearLayers) trailLayer.clearLayers();
-  _trailLines=[];
-  // Inicia novo array com timestamp
-  _trailPts=[{lat:fromLat, lng:fromLng, ts:Date.now()}];
-  _trailLine = L.polyline(
-    [[fromLat, fromLng]],
-    {color:'#00e676', weight:3, opacity:0.6, lineCap:'round', lineJoin:'round',
-     pane:'trailPane', renderer:_trailRenderer}
-  ).addTo(trailLayer);
-}
+  clearTrail();
+  if(!trailLayer || !pts || pts.length < 2) return;
 
-function updateTrail(lat, lng){
-  if(!_trailLine || !trailLayer) return;
-  const now = Date.now();
-  const last = _trailPts[_trailPts.length-1];
-  // Filtra pontos muito próximos (~5m)
-  if(last){
-    const dlat=Math.abs(lat-last.lat), dlng=Math.abs(lng-last.lng);
-    if(dlat<0.00005 && dlng<0.00005){
-      // Mesmo sem novo ponto, remove pontos antigos da janela
-      const cutoff = now - _TRAIL_WINDOW_MS;
-      const before = _trailPts.length;
-      _trailPts = _trailPts.filter(p => p.ts >= cutoff);
-      if(_trailPts.length !== before){
-        _redrawTrail();
-      }
-      return;
-    }
+  // Opacidades por segmento (caso tenham 1, 2 ou 3 segmentos)
+  // 2 pts → 1 segmento; 3 pts → 2 segmentos; 4 pts → 3 segmentos
+  const nSeg = pts.length - 1;
+  // Tabela de opacidade (do mais antigo ao mais novo)
+  const opTable = {
+    1: [0.85],
+    2: [0.40, 0.85],
+    3: [0.22, 0.50, 0.85]
+  };
+  const widths = {
+    1: [4.5],
+    2: [3.8, 4.5],
+    3: [3.2, 4.0, 4.8]
+  };
+  const ops = opTable[nSeg] || opTable[3];
+  const ws  = widths[nSeg]  || widths[3];
+
+  for(let i=0; i<nSeg; i++){
+    const a = pts[i], b = pts[i+1];
+    // Filtro: pula segmento se distância > _MAX_JUMP_KM (provável teleporte/falha GPS)
+    if(_haversineKm(a.lat,a.lng,b.lat,b.lng) > _MAX_JUMP_KM) continue;
+    const seg = L.polyline(
+      [[a.lat,a.lng],[b.lat,b.lng]],
+      { color:'#0ab5a8', weight:ws[i], opacity:ops[i],
+        lineCap:'round', lineJoin:'round',
+        pane:'trailPane', renderer:_trailRenderer,
+        interactive:false }
+    ).addTo(trailLayer);
+    _trailSegments.push(seg);
   }
-  // Adiciona novo ponto
-  _trailPts.push({lat, lng, ts:now});
-  // Remove pontos fora da janela de 5s
-  const cutoff = now - _TRAIL_WINDOW_MS;
-  _trailPts = _trailPts.filter(p => p.ts >= cutoff);
-  _redrawTrail();
 }
 
-function _redrawTrail(){
-  if(!_trailLine || !trailLayer) return;
-  trailLayer.removeLayer(_trailLine);
-  if(_trailPts.length < 1) return;
-  const latlngs = _trailPts.map(p => [p.lat, p.lng]);
-  _trailLine = L.polyline(
-    latlngs,
-    {color:'#00e676', weight:3, opacity:0.6, lineCap:'round', lineJoin:'round',
-     pane:'trailPane', renderer:_trailRenderer}
-  ).addTo(trailLayer);
+/* Chamada na seleção do veículo (ou após update) — desenha a cauda
+   imediatamente usando o buffer histórico que já foi sendo preenchido. */
+function refreshTrail(){
+  if(!activeV){ clearTrail(); return; }
+  if(getStatus(activeV) !== 'green'){ clearTrail(); return; }
+  const id = String(activeV.id);
+  const buf = _trailPos[id];
+  if(!buf || buf.length < 2){ clearTrail(); return; }
+  _drawTrailFromBuffer(buf);
 }
 
-/* drawTrail: compatibilidade — linha começa via startTrail na animação */
-function drawTrail(id){ /* noop */ }
+/* Stubs de compatibilidade — o ciclo antigo era startTrail/updateTrail/finishTrail
+   chamados pela interpolação. Agora a cauda é redesenhada do buffer. */
+function startTrail(fromLat, fromLng){ refreshTrail(); }
+function updateTrail(lat, lng){ /* noop — sem animação, sem updates intermediários */ }
+function drawTrail(id){ refreshTrail(); }
 
 /* ── MAP ── */
 function initMap(){
@@ -1372,9 +1278,7 @@ function renderMkrs(highlightId=null){
     if(vSel){
       const st=getStatus(vSel);const color=ST_COLOR[st];
       const icon=busMapIcon(color,true,false);
-      const curLat=(_interpFrom&&_interpTo)?_interpFrom.lat+(_interpTo.lat-_interpFrom.lat)*Math.min((Date.now()-_interpT0)/_interpDur,1):vSel.lat;
-      const curLng=(_interpFrom&&_interpTo)?_interpFrom.lng+(_interpTo.lng-_interpFrom.lng)*Math.min((Date.now()-_interpT0)/_interpDur,1):vSel.lng;
-      const m=L.marker([curLat,curLng],{icon,zIndexOffset:1000});
+      const m=L.marker([vSel.lat,vSel.lng],{icon,zIndexOffset:1000});
       m.on('click',()=>selectVehicle(vSel,true));
       singleLayer.addLayer(m);mkrs[vSel.id]=m;
     }
@@ -1422,13 +1326,11 @@ function selectVehicle(v, fromMap){
   document.getElementById('btnClearSel').classList.add('vis');
   renderMkrs(v.id);
   card.classList.remove('vis');
-  mapL.flyTo([v.lat,v.lng],17,{animate:true,duration:0.9});
-  // Inicia rastro sem mover marcador para trás
-  setTimeout(()=>{
-    const mk=mkrs[v.id];
-    if(mk && getStatus(v)==='green' && activeV) startTrail(v.lat, v.lng);
-    positionCard(v);
-  }, 950);
+  // Câmera vai direto para o veículo (sem animação) — combina com o modo teletransporte
+  mapL.setView([v.lat,v.lng], 17, {animate:false});
+  // Desenha cauda imediatamente a partir do buffer histórico (se houver ≥2 pts)
+  if(getStatus(v)==='green') refreshTrail();
+  setTimeout(()=>positionCard(v), 50);
   closeSidebarIfMobile();
 }
 
@@ -1816,12 +1718,24 @@ async function load(){
       const last=_trailPos[id][_trailPos[id].length-1];
       if(!last || last.lat!==v.lat || last.lng!==v.lng){
         _trailPos[id].push({lat:v.lat, lng:v.lng});
-        if(_trailPos[id].length>2) _trailPos[id].shift(); // máx 2
+        if(_trailPos[id].length>_TRAIL_MAX) _trailPos[id].shift(); // máx _TRAIL_MAX
       }
     });
 
     allV=norm(arr);
     filt=[...allV];
+
+    // Empurra a posição NOVA de cada veículo no buffer da cauda (após snapshot da anterior acima).
+    // Assim, ao chamar refreshTrail() mais abaixo, o buffer já contém [..., anterior, atual].
+    allV.forEach(v=>{
+      const id=String(v.id);
+      if(!_trailPos[id]) _trailPos[id]=[];
+      const last=_trailPos[id][_trailPos[id].length-1];
+      if(!last || last.lat!==v.lat || last.lng!==v.lng){
+        _trailPos[id].push({lat:v.lat, lng:v.lng});
+        if(_trailPos[id].length>_TRAIL_MAX) _trailPos[id].shift();
+      }
+    });
 
     // Captura posição visual ATUAL do marcador ANTES do renderList()
     // (renderList chama renderMkrs que recria o marcador na nova posição)
@@ -1849,19 +1763,26 @@ async function load(){
         activeV=fresh;
         const mk=mkrs[fresh.id];
         if(mk){
-          stopInterp();
-          if(getStatus(fresh)==='green'){
-            const moved=_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng)>=0.03;
-            if(moved){
-              console.log('[load] startInterp moved=true dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
-              startInterp(mk, fromLat, fromLng, fresh.lat, fresh.lng, _INTERP_MS);
-            } else {
-              console.log('[load] sem mover dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
-              mk.setLatLng([fresh.lat, fresh.lng]);
-            }
+          // Modo teletransporte: marcador salta direto para a nova posição
+          mk.setLatLng([fresh.lat, fresh.lng]);
+        }
+        // Câmera acompanha o veículo selecionado — sem animação, preserva zoom atual
+        const curZoom = mapL.getZoom();
+        mapL.setView([fresh.lat, fresh.lng], curZoom, {animate:false});
+        // Redesenha cauda a partir do buffer histórico (só para veículos ligados)
+        if(getStatus(fresh)==='green'){
+          const moved=_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng)>=0.03;
+          if(moved){
+            console.log('[load] teleport moved=true dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
+            refreshTrail();
           } else {
-            mk.setLatLng([fresh.lat, fresh.lng]);
+            console.log('[load] parado dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
+            // Veículo parado: sem cauda
+            clearTrail();
           }
+        } else {
+          // Status não-verde: sem cauda
+          clearTrail();
         }
         const card=document.getElementById('iCard');
         if(card.classList.contains('vis')) positionCard(fresh);
