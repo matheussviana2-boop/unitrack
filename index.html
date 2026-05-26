@@ -11,6 +11,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>UniTrack — Rastreamento</title>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@300;400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -1825,10 +1828,70 @@ window.addEventListener('appinstalled',function(){
   _pwaPrompt=null;
 });
 if('serviceWorker' in navigator){
-  window.addEventListener('load',function(){
+  /* ══ SISTEMA DE AUTO-UPDATE ══
+     APP_VERSION: incremente a cada deploy. O SW compara essa versão
+     com a armazenada e, se for diferente, limpa o cache e recarrega.
+     Assim o usuário nunca precisa limpar cache ou desinstalar o app.
+  */
+  const APP_VERSION = '1.0.0'; // ← ALTERE A CADA DEPLOY
+
+  window.addEventListener('load', function(){
+    // 1) Registra o SW normalmente
     navigator.serviceWorker.register('/sw.js')
-      .then(function(r){console.log('[SW] OK:',r.scope);})
-      .catch(function(e){console.warn('[SW] Falha:',e);});
+      .then(function(reg){
+        console.log('[SW] OK:', reg.scope);
+
+        // 2) Checa se há update do SW (ex: sw.js mudou no server)
+        reg.addEventListener('updatefound', function(){
+          const newWorker = reg.installing;
+          if(!newWorker) return;
+          newWorker.addEventListener('statechange', function(){
+            // Quando o novo SW está pronto e já existe um antigo controlando
+            if(newWorker.state === 'activated' && navigator.serviceWorker.controller){
+              console.log('[SW] Nova versão detectada — recarregando...');
+              window.location.reload();
+            }
+          });
+        });
+      })
+      .catch(function(e){ console.warn('[SW] Falha:', e); });
+
+    // 3) Se o SW já existia e tomou controle (ex: skipWaiting() chamado no sw.js)
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function(){
+      if(refreshing) return;
+      refreshing = true;
+      console.log('[SW] Controller mudou — recarregando...');
+      window.location.reload();
+    });
+
+    // 4) Verifica se a versão do app mudou (cobre o caso em que sw.js não mudou mas o HTML sim)
+    const storedVersion = localStorage.getItem('app_version');
+    if(storedVersion && storedVersion !== APP_VERSION){
+      console.log('[UniTrack] Versão mudou: '+storedVersion+' → '+APP_VERSION+'. Limpando caches...');
+      // Limpa todos os caches do SW
+      if('caches' in window){
+        caches.keys().then(function(names){
+          return Promise.all(names.map(function(name){ return caches.delete(name); }));
+        }).then(function(){
+          console.log('[UniTrack] Caches limpos. Recarregando...');
+          localStorage.setItem('app_version', APP_VERSION);
+          window.location.reload();
+        });
+      } else {
+        localStorage.setItem('app_version', APP_VERSION);
+        window.location.reload();
+      }
+    } else {
+      localStorage.setItem('app_version', APP_VERSION);
+    }
+
+    // 5) Força checagem periódica de update do SW (a cada 30 min)
+    setInterval(function(){
+      navigator.serviceWorker.getRegistration().then(function(reg){
+        if(reg) reg.update();
+      });
+    }, 30 * 60 * 1000);
   });
 }
 </script>
