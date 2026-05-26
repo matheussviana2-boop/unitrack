@@ -741,13 +741,15 @@ function sidebarCircleIcon(color, sz){
 }
 
 /* Ícone mapa: pin gota colorido + ônibus PNG dentro */
-function busMapIcon(color, active, ghost){
+function busMapIcon(color, active, ghost, bearing){
   active = active || false;
   ghost  = ghost  || false;
+  // bearing: número 0-360 ou null/undefined → sem chevron
+  var hasArrow = (typeof bearing === 'number' && !isNaN(bearing));
   var W   = active ? 48 : 38;
   var H   = Math.round(W * 1.38);
   var cr  = W * 0.355;   /* raio círculo branco */
-  var cy  = W * 0.425;   /* centro Y */
+  var cy  = W * 0.425;   /* centro Y do círculo branco — onde o chevron orbita */
   var op  = ghost ? '0.28' : '1';
   var c   = color || '#5a7a8a';
   var busSz = Math.round(cr * 1.55);
@@ -775,8 +777,53 @@ function busMapIcon(color, active, ghost){
     +'<circle cx="'+(W/2)+'" cy="'+cy+'" r="'+cr+'" fill="#ffffff"/>'
     +'</svg>';
 
-  /* Usa div com posicionamento para sobrepor o PNG ao SVG */
-  var html = '<div style="position:relative;width:'+W+'px;height:'+H+'px;opacity:'+op+';line-height:0;">'
+  /* CHEVRON DE DIREÇÃO — orbita o centro do círculo branco do pin
+     Tudo desenhado num SVG sobreposto com viewBox amplo, para que o chevron
+     não seja cortado em ângulos diagonais. */
+  var chevronSvg = '';
+  if(hasArrow){
+    // Tamanho do SVG do chevron — duas vezes o pin pra dar espaço de rotação em diagonal
+    var cSize = W * 2;
+    // Centro do círculo branco em coordenadas do chevronSvg (origem no canto sup-esq do chevronSvg)
+    var ccx = cSize/2;
+    var ccy = cSize/2;
+    // Distâncias dos chevrons em relação ao centro do círculo (na orientação "norte interno" = -y)
+    var ch1Inner = active ? 26 : 20; // chevron mais próximo do pin (mais transparente)
+    var ch2Outer = active ? 34 : 27; // chevron mais distante (mais opaco)
+    var chHalfW  = active ? 8  : 6.5; // meia-largura horizontal do V
+    var chDepth  = active ? 4  : 3.2; // "profundidade" do V (quanto a ponta sobe)
+    var sw       = active ? 3  : 2.4; // stroke width
+    // Os dois V's — desenhados em torno da origem (0,0), depois rotacionados juntos
+    // Cada V: três pontos formando "\_/" mas invertido pra "^"
+    //   esquerda: (-chHalfW, +chDepth)  topo: (0, 0)  direita: (+chHalfW, +chDepth)
+    //   posicionados a uma distância d "ao norte" do centro do círculo branco
+    function chev(d, opacity){
+      var x1 = -chHalfW,        y1 = -d + chDepth;
+      var xm = 0,               ym = -d;
+      var x2 =  chHalfW,        y2 = -d + chDepth;
+      return '<path d="M '+x1+' '+y1+' L '+xm+' '+ym+' L '+x2+' '+y2+'"'
+        +' stroke="'+c+'" stroke-width="'+sw+'" fill="none"'
+        +' stroke-linecap="round" stroke-linejoin="round"'
+        +' opacity="'+opacity+'"/>';
+    }
+    chevronSvg = '<svg width="'+cSize+'" height="'+cSize+'"'
+      +' viewBox="0 0 '+cSize+' '+cSize+'"'
+      +' style="position:absolute;left:'+((W-cSize)/2)+'px;top:'+(cy-cSize/2)+'px;'
+      +'pointer-events:none;overflow:visible;'
+      +'transition:transform 0.35s ease-out;"'
+      +' xmlns="http://www.w3.org/2000/svg">'
+      // Grupo central na posição do círculo branco, com rotação aplicada
+      +'<g transform="translate('+ccx+' '+ccy+') rotate('+bearing+')">'
+      +chev(ch1Inner, 0.55)   // mais perto do pin → mais transparente
+      +chev(ch2Outer, 0.9)    // mais longe → mais opaco (indica "frente")
+      +'</g>'
+      +'</svg>';
+  }
+
+  /* Container: chevronSvg fica ATRÁS do pin (z-index natural pela ordem do DOM).
+     overflow:visible permite que o chevron escape do retângulo do iconSize. */
+  var html = '<div style="position:relative;width:'+W+'px;height:'+H+'px;opacity:'+op+';line-height:0;overflow:visible;">'
+    +chevronSvg
     +svg
     +'<img src="'+BUS_PNG+'" '
     +'style="position:absolute;left:'+bx+'px;top:'+by+'px;width:'+busSz+'px;height:'+busSz+'px;display:block;" '
@@ -843,6 +890,17 @@ function _haversineKm(lat1,lng1,lat2,lng2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
+/* Bearing entre dois pontos GPS, em graus 0-360 (0=norte, 90=leste, 180=sul, 270=oeste).
+   Direção de A para B = pra onde o veículo está indo. */
+function _bearingDeg(lat1,lng1,lat2,lng2){
+  const φ1=lat1*Math.PI/180;
+  const φ2=lat2*Math.PI/180;
+  const Δλ=(lng2-lng1)*Math.PI/180;
+  const y=Math.sin(Δλ)*Math.cos(φ2);
+  const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+
 /* ══════════════════════════════════════════════════════
    MOVIMENTO DO MARCADOR — TELETRANSPORTE
    - Sem interpolação animada
@@ -859,93 +917,68 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
 }
 
 /* ══════════════════════════════════════════════════════
-   CAUDA CURTA DO VEÍCULO SELECIONADO
-   - Desenha até 3 segmentos com opacidade decrescente
-     (mais antigo = mais apagado, mais recente = mais vivo)
-   - Aparece SÓ para veículo selecionado E com status verde (ligado)
-   - Veículo parado/sem movimento desde o último update: sem cauda
-   - Redesenhada do buffer _trailPos a cada seleção e a cada update
+   SETA (CHEVRON) DE DIREÇÃO DO VEÍCULO SELECIONADO
+   - Dois chevrons em V na base do pin, apontando para o sentido do deslocamento
+   - Calculado a partir das 2 últimas posições do buffer _trailPos
+   - Aparece SÓ para veículo selecionado E status verde (ligado)
+   - Veículo parado (< 15m entre updates): sem seta
+   - Sem histórico ainda (< 2 pontos no buffer): sem seta — aparece após o 1º update
 ══════════════════════════════════════════════════════ */
 
-/* Remove a cauda do mapa */
-function clearTrail(){
-  if(!trailLayer){ _trailSegments=[]; return; }
-  _trailSegments.forEach(seg=>{
-    try{ trailLayer.removeLayer(seg); }catch(e){}
-  });
-  _trailSegments=[];
-  if(trailLayer.clearLayers) trailLayer.clearLayers();
-}
+/* Último bearing válido — usado só para evitar "tremor" quando o bearing é null
+   por movimento residual. Resetado ao trocar de veículo. */
+let _lastBearing = null;
 
-/* Garante que a camada do rastro existe (defensivo, caso initMap demore) */
-function _ensureTrailLayer(){
-  if(trailLayer) return;
-  if(!mapL) return;
-  if(!mapL.getPane('trailPane')){
-    mapL.createPane('trailPane');
-    mapL.getPane('trailPane').style.zIndex = 350;
-    mapL.getPane('trailPane').style.pointerEvents = 'none';
-  }
-  _trailRenderer = L.svg({pane:'trailPane'});
-  trailLayer = L.layerGroup([], {pane:'trailPane'}).addTo(mapL);
-}
-
-/* Desenha a cauda a partir do buffer _trailPos[id].
-   pts: array de {lat,lng} do mais antigo ao mais recente (≥ 2 itens).
-   Cada segmento ganha opacidade crescente (mais novo = mais opaco). */
-function _drawTrailFromBuffer(pts){
-  _ensureTrailLayer();
-  clearTrail();
-  if(!trailLayer || !pts || pts.length < 2) return;
-
-  // Opacidades por segmento (caso tenham 1, 2 ou 3 segmentos)
-  // 2 pts → 1 segmento; 3 pts → 2 segmentos; 4 pts → 3 segmentos
-  const nSeg = pts.length - 1;
-  // Tabela de opacidade (do mais antigo ao mais novo)
-  const opTable = {
-    1: [0.85],
-    2: [0.40, 0.85],
-    3: [0.22, 0.50, 0.85]
-  };
-  const widths = {
-    1: [4.5],
-    2: [3.8, 4.5],
-    3: [3.2, 4.0, 4.8]
-  };
-  const ops = opTable[nSeg] || opTable[3];
-  const ws  = widths[nSeg]  || widths[3];
-
-  for(let i=0; i<nSeg; i++){
-    const a = pts[i], b = pts[i+1];
-    // Filtro: pula segmento se distância > _MAX_JUMP_KM (provável teleporte/falha GPS)
-    if(_haversineKm(a.lat,a.lng,b.lat,b.lng) > _MAX_JUMP_KM) continue;
-    const seg = L.polyline(
-      [[a.lat,a.lng],[b.lat,b.lng]],
-      { color:'#0ab5a8', weight:ws[i], opacity:ops[i],
-        lineCap:'round', lineJoin:'round',
-        pane:'trailPane', renderer:_trailRenderer,
-        interactive:false }
-    ).addTo(trailLayer);
-    _trailSegments.push(seg);
-  }
-}
-
-/* Chamada na seleção do veículo (ou após update) — desenha a cauda
-   imediatamente usando o buffer histórico que já foi sendo preenchido. */
-function refreshTrail(){
-  if(!activeV){ clearTrail(); return; }
-  if(getStatus(activeV) !== 'green'){ clearTrail(); return; }
-  const id = String(activeV.id);
+/* Calcula o bearing atual do veículo a partir do buffer.
+   Retorna número 0-360 ou null se não houver movimento detectável. */
+function _currentBearing(id){
   const buf = _trailPos[id];
-  if(!buf || buf.length < 2){ clearTrail(); return; }
-  _drawTrailFromBuffer(buf);
+  if(!buf || buf.length < 2) return null;
+  const a = buf[buf.length-2];
+  const b = buf[buf.length-1];
+  const dist = _haversineKm(a.lat, a.lng, b.lat, b.lng);
+  if(dist < 0.015) return null;            // < 15m: parado/ruído de GPS
+  if(dist > _MAX_JUMP_KM) return null;     // salto absurdo: falha de GPS
+  return _bearingDeg(a.lat, a.lng, b.lat, b.lng);
 }
 
-/* Stubs de compatibilidade — o ciclo antigo era startTrail/updateTrail/finishTrail
-   chamados pela interpolação. Agora a cauda é redesenhada do buffer. */
-function startTrail(fromLat, fromLng){ refreshTrail(); }
-function updateTrail(lat, lng){ /* noop — sem animação, sem updates intermediários */ }
-function drawTrail(id){ refreshTrail(); }
+/* Re-renderiza o ícone do veículo selecionado com a seta apontando
+   pro bearing atual. Substitui o ícone sem reposicionar o marcador. */
+function refreshArrow(){
+  if(!activeV) return;
+  const id = String(activeV.id);
+  const mk = mkrs[id];
+  if(!mk) return;
+  const st = getStatus(activeV);
+  const showArrow = (st === 'green');
+  let bearing = null;
+  if(showArrow){
+    const nb = _currentBearing(id);
+    if(nb !== null){
+      _lastBearing = nb;
+      bearing = nb;
+    }
+    // Sem movimento detectável → bearing fica null → ícone renderiza sem chevron
+  }
+  const color = ST_COLOR[st];
+  const newIcon = busMapIcon(color, true, false, bearing);
+  mk.setIcon(newIcon);
+}
+
+/* Limpa estado da seta — chamar ao trocar/desselecionar veículo */
+function clearArrow(){
+  _lastBearing = null;
+}
+
+/* Stubs de compatibilidade com a API antiga de rastro (trail) — apontam
+   pro novo sistema. Mantidos pra não quebrar call sites remanescentes. */
+function clearTrail(){ clearArrow(); }
+function refreshTrail(){ refreshArrow(); }
+function startTrail(fromLat, fromLng){ refreshArrow(); }
+function updateTrail(lat, lng){ /* noop */ }
+function drawTrail(id){ refreshArrow(); }
+function _ensureTrailLayer(){ /* noop — sistema de seta não usa layer separada */ }
+function _drawTrailFromBuffer(pts){ /* noop */ }
 
 /* ── MAP ── */
 function initMap(){
@@ -1277,7 +1310,13 @@ function renderMkrs(highlightId=null){
     const vSel=filt.find(v=>String(v.id)===String(highlightId));
     if(vSel){
       const st=getStatus(vSel);const color=ST_COLOR[st];
-      const icon=busMapIcon(color,true,false);
+      // Calcula bearing inicial do buffer se já houver histórico (status verde + ≥2 pontos)
+      let initBearing = null;
+      if(st === 'green'){
+        initBearing = _currentBearing(String(vSel.id));
+        if(initBearing !== null) _lastBearing = initBearing;
+      }
+      const icon=busMapIcon(color,true,false,initBearing);
       const m=L.marker([vSel.lat,vSel.lng],{icon,zIndexOffset:1000});
       m.on('click',()=>selectVehicle(vSel,true));
       singleLayer.addLayer(m);mkrs[vSel.id]=m;
@@ -1319,7 +1358,7 @@ function selectVehicle(v, fromMap){
   // Novo veículo selecionado
   activeV = v;
   stopInterp();
-  clearTrail(); // limpa rastro do veículo anterior imediatamente
+  clearArrow(); // limpa estado da seta do veículo anterior
   document.querySelectorAll('.vi').forEach(e=>e.classList.remove('act'));
   const li = document.getElementById(`li-${v.id}`);
   if(li){li.classList.add('act');li.scrollIntoView({behavior:'smooth',block:'nearest'});}
@@ -1329,7 +1368,7 @@ function selectVehicle(v, fromMap){
   // Câmera vai direto para o veículo (sem animação) — combina com o modo teletransporte
   mapL.setView([v.lat,v.lng], 17, {animate:false});
   // Desenha cauda imediatamente a partir do buffer histórico (se houver ≥2 pts)
-  if(getStatus(v)==='green') refreshTrail();
+  if(getStatus(v)==='green') refreshArrow();
   setTimeout(()=>positionCard(v), 50);
   closeSidebarIfMobile();
 }
@@ -1346,7 +1385,7 @@ function clearSelection(){
   document.getElementById('acDrop').classList.remove('open');
   searchQ=''; selIdx=-1; activeFilter=null;
   stopInterp();
-  clearTrail();
+  clearArrow();
   filt=[...allV];
   renderList();
   updateBadgeHighlight();
@@ -1774,15 +1813,15 @@ async function load(){
           const moved=_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng)>=0.03;
           if(moved){
             console.log('[load] teleport moved=true dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
-            refreshTrail();
+            refreshArrow();
           } else {
             console.log('[load] parado dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
             // Veículo parado: sem cauda
-            clearTrail();
+            clearArrow();
           }
         } else {
           // Status não-verde: sem cauda
-          clearTrail();
+          clearArrow();
         }
         const card=document.getElementById('iCard');
         if(card.classList.contains('vis')) positionCard(fresh);
