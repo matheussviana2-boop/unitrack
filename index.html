@@ -98,8 +98,8 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
 .ac-clear{position:absolute;right:9px;top:50%;transform:translateY(-50%);color:var(--text3);cursor:pointer;font-size:15px;line-height:1;display:none;}
 .ac-clear:hover{color:var(--text);}
 .ac-clear.show{display:block;}
-.ac-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:99999;background:var(--navy2);border:1px solid var(--border2);border-radius:8px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.7);display:none;max-height:220px;overflow-y:auto;animation:dropIn 0.15s ease;}
-.ac-dropdown.open{display:block;}
+.ac-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:99999;background:var(--navy2);border:1px solid var(--border2);border-radius:8px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.7);display:none!important;max-height:220px;overflow-y:auto;animation:dropIn 0.15s ease;}
+.ac-dropdown.open{display:none!important;}
 /* Mobile: position:fixed para escapar do overflow:hidden da sidebar */
 .ac-dropdown.fixed-drop{position:fixed!important;left:0!important;right:auto!important;top:auto!important;}
 .ac-dropdown::-webkit-scrollbar{width:3px;}
@@ -581,7 +581,7 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
         <div class="ac-wrap" id="acWrap">
           <svg class="ac-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4a7090" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input class="ac-input" id="acInput" placeholder="Veículo ou motorista..." autocomplete="off"
-            oninput="acFilter()" onfocus="acOpen()" onkeydown="acKey(event)">
+            oninput="acFilter()">
           <span class="ac-clear" id="acClear" onclick="acClear()">×</span>
           <div class="ac-dropdown" id="acDrop"></div>
         </div>
@@ -741,15 +741,13 @@ function sidebarCircleIcon(color, sz){
 }
 
 /* Ícone mapa: pin gota colorido + ônibus PNG dentro */
-function busMapIcon(color, active, ghost, bearing){
+function busMapIcon(color, active, ghost){
   active = active || false;
   ghost  = ghost  || false;
-  // bearing: número 0-360 ou null/undefined → sem chevron
-  var hasArrow = (typeof bearing === 'number' && !isNaN(bearing));
   var W   = active ? 48 : 38;
   var H   = Math.round(W * 1.38);
   var cr  = W * 0.355;   /* raio círculo branco */
-  var cy  = W * 0.425;   /* centro Y do círculo branco — onde o chevron orbita */
+  var cy  = W * 0.425;   /* centro Y */
   var op  = ghost ? '0.28' : '1';
   var c   = color || '#5a7a8a';
   var busSz = Math.round(cr * 1.55);
@@ -777,53 +775,8 @@ function busMapIcon(color, active, ghost, bearing){
     +'<circle cx="'+(W/2)+'" cy="'+cy+'" r="'+cr+'" fill="#ffffff"/>'
     +'</svg>';
 
-  /* CHEVRON DE DIREÇÃO — orbita o centro do círculo branco do pin
-     Tudo desenhado num SVG sobreposto com viewBox amplo, para que o chevron
-     não seja cortado em ângulos diagonais. */
-  var chevronSvg = '';
-  if(hasArrow){
-    // Tamanho do SVG do chevron — duas vezes o pin pra dar espaço de rotação em diagonal
-    var cSize = W * 2;
-    // Centro do círculo branco em coordenadas do chevronSvg (origem no canto sup-esq do chevronSvg)
-    var ccx = cSize/2;
-    var ccy = cSize/2;
-    // Distâncias dos chevrons em relação ao centro do círculo (na orientação "norte interno" = -y)
-    var ch1Inner = active ? 26 : 20; // chevron mais próximo do pin (mais transparente)
-    var ch2Outer = active ? 34 : 27; // chevron mais distante (mais opaco)
-    var chHalfW  = active ? 8  : 6.5; // meia-largura horizontal do V
-    var chDepth  = active ? 4  : 3.2; // "profundidade" do V (quanto a ponta sobe)
-    var sw       = active ? 3  : 2.4; // stroke width
-    // Os dois V's — desenhados em torno da origem (0,0), depois rotacionados juntos
-    // Cada V: três pontos formando "\_/" mas invertido pra "^"
-    //   esquerda: (-chHalfW, +chDepth)  topo: (0, 0)  direita: (+chHalfW, +chDepth)
-    //   posicionados a uma distância d "ao norte" do centro do círculo branco
-    function chev(d, opacity){
-      var x1 = -chHalfW,        y1 = -d + chDepth;
-      var xm = 0,               ym = -d;
-      var x2 =  chHalfW,        y2 = -d + chDepth;
-      return '<path d="M '+x1+' '+y1+' L '+xm+' '+ym+' L '+x2+' '+y2+'"'
-        +' stroke="'+c+'" stroke-width="'+sw+'" fill="none"'
-        +' stroke-linecap="round" stroke-linejoin="round"'
-        +' opacity="'+opacity+'"/>';
-    }
-    chevronSvg = '<svg width="'+cSize+'" height="'+cSize+'"'
-      +' viewBox="0 0 '+cSize+' '+cSize+'"'
-      +' style="position:absolute;left:'+((W-cSize)/2)+'px;top:'+(cy-cSize/2)+'px;'
-      +'pointer-events:none;overflow:visible;'
-      +'transition:transform 0.35s ease-out;"'
-      +' xmlns="http://www.w3.org/2000/svg">'
-      // Grupo central na posição do círculo branco, com rotação aplicada
-      +'<g transform="translate('+ccx+' '+ccy+') rotate('+bearing+')">'
-      +chev(ch1Inner, 0.55)   // mais perto do pin → mais transparente
-      +chev(ch2Outer, 0.9)    // mais longe → mais opaco (indica "frente")
-      +'</g>'
-      +'</svg>';
-  }
-
-  /* Container: chevronSvg fica ATRÁS do pin (z-index natural pela ordem do DOM).
-     overflow:visible permite que o chevron escape do retângulo do iconSize. */
-  var html = '<div style="position:relative;width:'+W+'px;height:'+H+'px;opacity:'+op+';line-height:0;overflow:visible;">'
-    +chevronSvg
+  /* Usa div com posicionamento para sobrepor o PNG ao SVG */
+  var html = '<div style="position:relative;width:'+W+'px;height:'+H+'px;opacity:'+op+';line-height:0;">'
     +svg
     +'<img src="'+BUS_PNG+'" '
     +'style="position:absolute;left:'+bx+'px;top:'+by+'px;width:'+busSz+'px;height:'+busSz+'px;display:block;" '
@@ -890,17 +843,6 @@ function _haversineKm(lat1,lng1,lat2,lng2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-/* Bearing entre dois pontos GPS, em graus 0-360 (0=norte, 90=leste, 180=sul, 270=oeste).
-   Direção de A para B = pra onde o veículo está indo. */
-function _bearingDeg(lat1,lng1,lat2,lng2){
-  const φ1=lat1*Math.PI/180;
-  const φ2=lat2*Math.PI/180;
-  const Δλ=(lng2-lng1)*Math.PI/180;
-  const y=Math.sin(Δλ)*Math.cos(φ2);
-  const x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
-  return (Math.atan2(y,x)*180/Math.PI+360)%360;
-}
-
 /* ══════════════════════════════════════════════════════
    MOVIMENTO DO MARCADOR — TELETRANSPORTE
    - Sem interpolação animada
@@ -917,68 +859,16 @@ function startInterp(mk, fromLat, fromLng, toLat, toLng, dur){
 }
 
 /* ══════════════════════════════════════════════════════
-   SETA (CHEVRON) DE DIREÇÃO DO VEÍCULO SELECIONADO
-   - Dois chevrons em V na base do pin, apontando para o sentido do deslocamento
-   - Calculado a partir das 2 últimas posições do buffer _trailPos
-   - Aparece SÓ para veículo selecionado E status verde (ligado)
-   - Veículo parado (< 15m entre updates): sem seta
-   - Sem histórico ainda (< 2 pontos no buffer): sem seta — aparece após o 1º update
+   STUBS — sem rastro/cauda/seta (removidos por decisão de design).
+   Mantidos como noop para não quebrar call sites existentes.
 ══════════════════════════════════════════════════════ */
-
-/* Último bearing válido — usado só para evitar "tremor" quando o bearing é null
-   por movimento residual. Resetado ao trocar de veículo. */
-let _lastBearing = null;
-
-/* Calcula o bearing atual do veículo a partir do buffer.
-   Retorna número 0-360 ou null se não houver movimento detectável. */
-function _currentBearing(id){
-  const buf = _trailPos[id];
-  if(!buf || buf.length < 2) return null;
-  const a = buf[buf.length-2];
-  const b = buf[buf.length-1];
-  const dist = _haversineKm(a.lat, a.lng, b.lat, b.lng);
-  if(dist < 0.015) return null;            // < 15m: parado/ruído de GPS
-  if(dist > _MAX_JUMP_KM) return null;     // salto absurdo: falha de GPS
-  return _bearingDeg(a.lat, a.lng, b.lat, b.lng);
-}
-
-/* Re-renderiza o ícone do veículo selecionado com a seta apontando
-   pro bearing atual. Substitui o ícone sem reposicionar o marcador. */
-function refreshArrow(){
-  if(!activeV) return;
-  const id = String(activeV.id);
-  const mk = mkrs[id];
-  if(!mk) return;
-  const st = getStatus(activeV);
-  const showArrow = (st === 'green');
-  let bearing = null;
-  if(showArrow){
-    const nb = _currentBearing(id);
-    if(nb !== null){
-      _lastBearing = nb;
-      bearing = nb;
-    }
-    // Sem movimento detectável → bearing fica null → ícone renderiza sem chevron
-  }
-  const color = ST_COLOR[st];
-  const newIcon = busMapIcon(color, true, false, bearing);
-  mk.setIcon(newIcon);
-}
-
-/* Limpa estado da seta — chamar ao trocar/desselecionar veículo */
-function clearArrow(){
-  _lastBearing = null;
-}
-
-/* Stubs de compatibilidade com a API antiga de rastro (trail) — apontam
-   pro novo sistema. Mantidos pra não quebrar call sites remanescentes. */
-function clearTrail(){ clearArrow(); }
-function refreshTrail(){ refreshArrow(); }
-function startTrail(fromLat, fromLng){ refreshArrow(); }
-function updateTrail(lat, lng){ /* noop */ }
-function drawTrail(id){ refreshArrow(); }
-function _ensureTrailLayer(){ /* noop — sistema de seta não usa layer separada */ }
-function _drawTrailFromBuffer(pts){ /* noop */ }
+function clearTrail(){}
+function refreshTrail(){}
+function startTrail(){}
+function updateTrail(){}
+function drawTrail(){}
+function _ensureTrailLayer(){}
+function _drawTrailFromBuffer(){}
 
 /* ── MAP ── */
 function initMap(){
@@ -1183,9 +1073,13 @@ function acFilter(){
   document.getElementById('acClear').classList.toggle('show',q.length>0);
   searchQ=q.toLowerCase();
   renderList();
-  acRender();
+  // Dropdown removido — a filtragem acontece diretamente na lista lateral
+  const drop=document.getElementById('acDrop');
+  drop.classList.remove('open');
+  drop.classList.remove('fixed-drop');
+  drop.style.cssText='';
 }
-function acOpen(){acRender();}
+function acOpen(){ /* noop — sem dropdown, busca filtra direto na lista */ }
 /* Abre o dropdown posicionando com fixed no mobile para escapar do overflow:hidden */
 function _acDropOpen(drop){
   drop.classList.add('open');
@@ -1310,13 +1204,7 @@ function renderMkrs(highlightId=null){
     const vSel=filt.find(v=>String(v.id)===String(highlightId));
     if(vSel){
       const st=getStatus(vSel);const color=ST_COLOR[st];
-      // Calcula bearing inicial do buffer se já houver histórico (status verde + ≥2 pontos)
-      let initBearing = null;
-      if(st === 'green'){
-        initBearing = _currentBearing(String(vSel.id));
-        if(initBearing !== null) _lastBearing = initBearing;
-      }
-      const icon=busMapIcon(color,true,false,initBearing);
+      const icon=busMapIcon(color,true,false);
       const m=L.marker([vSel.lat,vSel.lng],{icon,zIndexOffset:1000});
       m.on('click',()=>selectVehicle(vSel,true));
       singleLayer.addLayer(m);mkrs[vSel.id]=m;
@@ -1358,7 +1246,7 @@ function selectVehicle(v, fromMap){
   // Novo veículo selecionado
   activeV = v;
   stopInterp();
-  clearArrow(); // limpa estado da seta do veículo anterior
+  clearTrail(); // limpa rastro do veículo anterior imediatamente
   document.querySelectorAll('.vi').forEach(e=>e.classList.remove('act'));
   const li = document.getElementById(`li-${v.id}`);
   if(li){li.classList.add('act');li.scrollIntoView({behavior:'smooth',block:'nearest'});}
@@ -1368,7 +1256,7 @@ function selectVehicle(v, fromMap){
   // Câmera vai direto para o veículo (sem animação) — combina com o modo teletransporte
   mapL.setView([v.lat,v.lng], 17, {animate:false});
   // Desenha cauda imediatamente a partir do buffer histórico (se houver ≥2 pts)
-  if(getStatus(v)==='green') refreshArrow();
+  if(getStatus(v)==='green') refreshTrail();
   setTimeout(()=>positionCard(v), 50);
   closeSidebarIfMobile();
 }
@@ -1385,7 +1273,7 @@ function clearSelection(){
   document.getElementById('acDrop').classList.remove('open');
   searchQ=''; selIdx=-1; activeFilter=null;
   stopInterp();
-  clearArrow();
+  clearTrail();
   filt=[...allV];
   renderList();
   updateBadgeHighlight();
@@ -1813,15 +1701,15 @@ async function load(){
           const moved=_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng)>=0.03;
           if(moved){
             console.log('[load] teleport moved=true dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
-            refreshArrow();
+            refreshTrail();
           } else {
             console.log('[load] parado dist='+_haversineKm(fromLat,fromLng,fresh.lat,fresh.lng).toFixed(4));
             // Veículo parado: sem cauda
-            clearArrow();
+            clearTrail();
           }
         } else {
           // Status não-verde: sem cauda
-          clearArrow();
+          clearTrail();
         }
         const card=document.getElementById('iCard');
         if(card.classList.contains('vis')) positionCard(fresh);
