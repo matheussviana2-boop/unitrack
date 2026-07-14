@@ -986,10 +986,19 @@ function norm(arr){
     return '';
   }
 
+  function parseCoord(value){
+    if(value===undefined||value===null||value==='') return NaN;
+    var txt=String(value).trim().replace(/\s/g,'');
+    // API brasileira pode devolver decimal com vírgula
+    if(txt.indexOf(',')>=0 && txt.indexOf('.')<0) txt=txt.replace(',','.');
+    else if(txt.indexOf(',')>=0 && txt.indexOf('.')>=0) txt=txt.replace(/\./g,'').replace(',','.');
+    return Number(txt);
+  }
+
   return arr.filter(function(x){
-    var la=parseFloat(x.latitude||x.lat||x.latitudeatual||x.Latitude||x.LAT||0);
-    var lo=parseFloat(x.longitude||x.lng||x.lon||x.longitudeatual||x.Longitude||x.LON||0);
-    return la!==0&&lo!==0&&!isNaN(la)&&!isNaN(lo);
+    var la=parseCoord(x.latitude??x.lat??x.latitudeatual??x.Latitude??x.LAT);
+    var lo=parseCoord(x.longitude??x.lng??x.lon??x.longitudeatual??x.Longitude??x.LON);
+    return la!==0&&lo!==0&&Number.isFinite(la)&&Number.isFinite(lo)&&Math.abs(la)<=90&&Math.abs(lo)<=180;
   }).map(function(x,i){
     // frota / placa / identificação do veículo
     var frota=pick(x,[
@@ -1032,11 +1041,11 @@ function norm(arr){
     if(!hodometro) hodometro='—';
 
     // lat/lng
-    var lat=parseFloat(x.latitude||x.lat||x.latitudeatual||x.Latitude||x.LAT);
-    var lng=parseFloat(x.longitude||x.lng||x.lon||x.longitudeatual||x.Longitude||x.LON);
+    var lat=parseCoord(x.latitude??x.lat??x.latitudeatual??x.Latitude??x.LAT);
+    var lng=parseCoord(x.longitude??x.lng??x.lon??x.longitudeatual??x.Longitude??x.LON);
 
     return {
-      id: x.id||x.codigo||x.equipamento||x.imei||x.Id||x.ID||i,
+      id: String(x._sourceKey??'0')+'::'+String(x.id||x.codigo||x.equipamento||x.imei||x.Id||x.ID||frota||i),
       frota: frota,
       motorista: motorista,
       setor: pick(x,['setor','grupo','empresa','filial','cliente','Setor','Empresa'])||'—',
@@ -1437,7 +1446,7 @@ function renderList(){
       const el=document.createElement('div');
       el.className='vi'+(activeV&&String(activeV.id)===String(v.id)?' act':'');
       el.id=`li-${v.id}`;
-      const linfo=linhaMap[v.frota]||null;
+      const linfo=linhaMap[v.frota]||linhaMap[String(v.frota).toUpperCase()]||null;
       const lBadge=linfo&&linfo.nomeLinha
         ? (() => {
             const on=linfo.statusLinha&&!['encerrada','finalizada','inativa','0','false'].includes((linfo.statusLinha||'').toLowerCase());
@@ -1491,7 +1500,7 @@ function positionCard(v){
   const sb=document.getElementById('icSbar');sb.className='ic-sbar '+sc.sbar;
   document.getElementById('icStxt').textContent=sc.txt;
   // Linha (API2)
-  const linhaInfo=linhaMap[v.frota]||null;
+  const linhaInfo=linhaMap[v.frota]||linhaMap[String(v.frota).toUpperCase()]||null;
   const linhaRow=document.getElementById('icLinhaRow');
   if(linhaInfo&&linhaInfo.nomeLinha){
     const isOn=linhaInfo.statusLinha&&!['encerrada','finalizada','inativa','0','false'].includes(linhaInfo.statusLinha.toLowerCase());
@@ -1593,7 +1602,10 @@ async function loadLinhas(){
         'status_viagem','statusViagem','ativo','andamento','em_andamento'
       ]);
 
-      if(cod && nome) map[cod]={nomeLinha:nome, statusLinha:st};
+      if(cod && nome){
+        map[cod]={nomeLinha:nome, statusLinha:st};
+        map[cod.toUpperCase()]={nomeLinha:nome, statusLinha:st};
+      }
     });
     linhaMap=map;
     linhasCacheTs = Date.now();
@@ -1627,7 +1639,11 @@ async function load(){
     // Aguarda linhas com timeout adicional de 5s
     await Promise.race([linhasPromise, new Promise(res=>setTimeout(res,5000))]);
 
-    if(!r.ok)throw new Error(`HTTP ${r.status}`);
+    if(!r.ok){
+      let detail='';
+      try{ detail=await r.text(); }catch(_e){}
+      throw new Error(`API posição HTTP ${r.status}${detail?' — '+detail.slice(0,180):''}`);
+    }
     const raw=await r.json();
     let arr=null;
     if(Array.isArray(raw))arr=raw;
