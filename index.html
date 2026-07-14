@@ -56,6 +56,11 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
 .logo-divider{width:1px;height:26px;background:var(--border2);}
 .logo-sub{font-size:10px;font-weight:600;color:var(--text3);letter-spacing:2.5px;text-transform:uppercase;}
 .topbar-center{display:flex;align-items:center;gap:8px;}
+.sector-filter{display:flex;align-items:center;gap:7px;background:rgba(10,181,168,0.08);border:1px solid rgba(10,181,168,0.25);border-radius:10px;padding:5px 8px;min-width:190px;}
+.sector-filter svg{flex-shrink:0;color:var(--teal);}
+.sector-select{width:100%;min-width:0;background:transparent;border:none;outline:none;color:var(--text);font-family:'Exo 2',sans-serif;font-size:11px;font-weight:700;cursor:pointer;}
+.sector-select option{background:var(--navy2);color:var(--text);}
+.sector-loading{opacity:.65;pointer-events:none;}
 .stat-chip{display:flex;align-items:center;gap:6px;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid;}
 .sc-g{background:rgba(0,212,106,0.1);color:#00d46a;border-color:rgba(0,212,106,0.25);}
 .sc-y{background:rgba(245,166,35,0.1);color:#f5a623;border-color:rgba(245,166,35,0.25);}
@@ -292,7 +297,11 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
   }
   /* hambúrguer à esquerda, logo no centro, botões à direita */
   .logo-wrap{flex:1;justify-content:flex-start;}
-  .topbar-center{display:none!important;}
+  .topbar-center{display:flex!important;flex:0 1 138px;min-width:0;}
+  .topbar-center #mainBadge{display:none!important;}
+  .sector-filter{min-width:0;width:100%;padding:5px 7px;}
+  .sector-select{font-size:10px;}
+  .sector-filter svg{display:none;}
   .topbar-right{gap:8px;flex-shrink:0;}
 
   /* clock mobile */
@@ -541,6 +550,12 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
     </div>
     <!-- Badge centralizado — igual ao antigo map-badge, funciona em PC e mobile -->
     <div class="topbar-center">
+      <label class="sector-filter sector-loading" id="sectorFilterWrap" title="Filtrar veículos por setor">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg>
+        <select id="sectorSelect" class="sector-select" onchange="changeSector(this.value)" aria-label="Selecionar setor">
+          <option value="__loading__">Carregando setores...</option>
+        </select>
+      </label>
       <div id="mainBadge" style="display:flex;align-items:center;gap:12px;background:rgba(9,20,32,0.92);border:1px solid var(--border2);border-radius:12px;padding:7px 14px;box-shadow:0 4px 20px rgba(0,0,0,0.5);backdrop-filter:blur(4px);"></div>
     </div>
     <!-- Direita -->
@@ -646,6 +661,7 @@ var _needProxy=false;
 var _PROXY='';
 const API  =_API_BASE;
 const API2 =_needProxy?_PROXY+encodeURIComponent(_API2_BASE):_API2_BASE;
+const API3 = '/api/cadastro';
 /* Cache-busting: timestamp na URL garante dado fresco em qualquer proxy/CDN */
 function apiUrl(base){ return base+'?_='+Date.now(); }
 const RSEC=60;
@@ -653,6 +669,8 @@ let mapL,cluster,singleLayer,layerStreet,layerSat,currentLayer='street';
 let trailLayer=null; // layerGroup dedicado ao rastro
 let _trailRenderer=null; // renderer SVG explícito — mais compatível mobile/WebKit
 let allV=[],filt=[],mkrs={},cdInt=null,cd=RSEC,activeV=null,searchQ='',selIdx=-1;
+let cadastroLookup=new Map(), setoresDisponiveis=[], setorSelecionado='todos', cadastroCarregado=false;
+const SETOR_STORAGE_KEY='unitrack_setor_selecionado_v1';
 /* ── MODO TELETRANSPORTE + CAUDA CURTA ──
    Sem interpolação animada: marcador teletransporta para a nova posição
    a cada update da BrasilSat. Veículo selecionado: câmera acompanha
@@ -1044,11 +1062,22 @@ function norm(arr){
     var lat=parseCoord(x.latitude??x.lat??x.latitudeatual??x.Latitude??x.LAT);
     var lng=parseCoord(x.longitude??x.lng??x.lon??x.longitudeatual??x.Longitude??x.LON);
 
+    var sourceKey=String(x._sourceKey??0);
+    var candidatos=[x.codigoveiculo,x.codigoVeiculo,x.codigo_veiculo,x.codigo,x.id,x.equipamento,x.imei,frota,x.placa].filter(Boolean);
+    var cadastro=null;
+    for(var ci=0;ci<candidatos.length&&!cadastro;ci++){
+      cadastro=cadastroLookup.get(sourceKey+'::'+normalizaChave(candidatos[ci]))||null;
+    }
+    if(!cadastro) return null;
+
     return {
-      id: String(x._sourceKey??'0')+'::'+String(x.id||x.codigo||x.equipamento||x.imei||x.Id||x.ID||frota||i),
+      id: sourceKey+'::'+String(x.id||x.codigo||x.equipamento||x.imei||x.Id||x.ID||frota||i),
       frota: frota,
       motorista: motorista,
-      setor: pick(x,['setor','grupo','empresa','filial','cliente','Setor','Empresa'])||'—',
+      setorId: cadastro.setorId,
+      setor: cadastro.setorNome,
+      setorCodigo: cadastro.setorCodigo,
+      sourceKey: sourceKey,
       datahora: datahora,
       ignicao: ignicao,
       velocidade: velocidade,
@@ -1056,7 +1085,57 @@ function norm(arr){
       lat: lat,
       lng: lng,
     };
+  }).filter(Boolean);
+}
+
+function normalizaChave(value){
+  return String(value??'').trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').toUpperCase();
+}
+function veiculosDoSetor(){
+  return setorSelecionado==='todos'?allV:allV.filter(v=>v.setorId===setorSelecionado);
+}
+function preencherFiltroSetores(){
+  const select=document.getElementById('sectorSelect');
+  const wrap=document.getElementById('sectorFilterWrap');
+  if(!select)return;
+  const nomes=new Map();
+  setoresDisponiveis.forEach(s=>{ if(!nomes.has(s.nome)) nomes.set(s.nome,[]); nomes.get(s.nome).push(s); });
+  select.innerHTML='<option value="todos">Todos os setores</option>';
+  setoresDisponiveis.forEach(s=>{
+    const opt=document.createElement('option'); opt.value=s.id;
+    opt.textContent=nomes.get(s.nome).length>1?s.nome+' ('+s.contaId.replace('conta_','Conta ')+')':s.nome;
+    select.appendChild(opt);
   });
+  const salvo=localStorage.getItem(SETOR_STORAGE_KEY)||'todos';
+  setorSelecionado=setoresDisponiveis.some(s=>s.id===salvo)?salvo:'todos';
+  select.value=setorSelecionado;
+  wrap.classList.remove('sector-loading');
+}
+function changeSector(value){
+  setorSelecionado=value||'todos';
+  localStorage.setItem(SETOR_STORAGE_KEY,setorSelecionado);
+  activeV=null; activeFilter=null; searchQ=''; selIdx=-1;
+  document.getElementById('acInput').value='';
+  document.getElementById('acClear').classList.remove('show');
+  document.getElementById('iCard').classList.remove('vis');
+  renderList();
+  setTimeout(()=>fitAll(),100);
+}
+async function loadCadastro(){
+  if(cadastroCarregado)return;
+  const r=await fetch(API3,{cache:'default'});
+  if(!r.ok)throw new Error('Cadastro de setores HTTP '+r.status);
+  const raw=await r.json();
+  const veiculos=Array.isArray(raw.veiculos)?raw.veiculos:[];
+  setoresDisponiveis=Array.isArray(raw.setores)?raw.setores:[];
+  cadastroLookup=new Map();
+  veiculos.forEach(v=>{
+    const source=String(v.sourceKey??0);
+    [v.codigoVeiculo,v.frota,v.placa].filter(Boolean).forEach(ch=>cadastroLookup.set(source+'::'+normalizaChave(ch),v));
+  });
+  cadastroCarregado=true;
+  preencherFiltroSetores();
+  console.log('[UniTrack] cadastro:',setoresDisponiveis.length,'setores,',veiculos.length,'veículos');
 }
 
 /* ══════════════════════════════════════════
@@ -1114,11 +1193,12 @@ function acRender(){
     drop.classList.remove('fixed-drop');
     return;
   }
-  const frotaHits=[...new Set(allV.filter(v=>v.frota.toLowerCase().includes(q)).map(v=>v.frota))].slice(0,8);
-  const motoHits=[...new Set(allV.filter(v=>v.motorista.toLowerCase().includes(q)&&v.motorista!=='—').map(v=>v.motorista))].slice(0,6);
+  const setorBase=veiculosDoSetor();
+  const frotaHits=[...new Set(setorBase.filter(v=>v.frota.toLowerCase().includes(q)).map(v=>v.frota))].slice(0,8);
+  const motoHits=[...new Set(setorBase.filter(v=>v.motorista.toLowerCase().includes(q)&&v.motorista!=='—').map(v=>v.motorista))].slice(0,6);
   // Linhas únicas que batem com a busca
   const linhaHits=[...new Map(
-    allV
+    setorBase
       .filter(v=>{ const li=linhaMap[v.frota]; return li&&li.nomeLinha&&li.nomeLinha.toLowerCase().includes(q); })
       .map(v=>{ const li=linhaMap[v.frota]; return [li.nomeLinha, li.statusLinha||'']; })
   ).entries()].slice(0,6);
@@ -1170,14 +1250,14 @@ function acSelect(val,type){
   searchQ=val.toLowerCase();
   renderList();
   if(type==='frota'){
-    const v=allV.find(x=>x.frota===val);
+    const v=veiculosDoSetor().find(x=>x.frota===val);
     if(v)selectVehicle(v,false);
   }else if(type==='motorista'){
-    const v=allV.find(x=>x.motorista===val);
+    const v=veiculosDoSetor().find(x=>x.motorista===val);
     if(v)selectVehicle(v,false);
   }else if(type==='linha'){
     // Seleciona o primeiro veículo que esteja nessa linha
-    const v=allV.find(x=>{ const li=linhaMap[x.frota]; return li&&li.nomeLinha===val; });
+    const v=veiculosDoSetor().find(x=>{ const li=linhaMap[x.frota]; return li&&li.nomeLinha===val; });
     if(v)selectVehicle(v,false);
   }
 }
@@ -1286,7 +1366,7 @@ function clearSelection(){
   searchQ=''; selIdx=-1; activeFilter=null;
   stopInterp();
   clearTrail();
-  filt=[...allV];
+  filt=[...veiculosDoSetor()];
   renderList();
   updateBadgeHighlight();
   setTimeout(()=>fitAll(), 100);
@@ -1334,8 +1414,9 @@ function updateBadgeHighlight(){
 /* ── BADGE ── */
 function updateBadge(){
   let g=0,y=0,d=0;
-  allV.forEach(v=>{const s=getStatus(v);if(s==='green')g++;else if(s==='yellow')y++;else d++;});
-  const total=allV.length;
+  const badgeBase=veiculosDoSetor();
+  badgeBase.forEach(v=>{const s=getStatus(v);if(s==='green')g++;else if(s==='yellow')y++;else d++;});
+  const total=badgeBase.length;
   document.getElementById('sbCount').textContent=filt.length;
 
   // 'Total' usa azul para diferenciar de 'Ligados' (verde)
@@ -1416,13 +1497,14 @@ function renderList(){
   const b=document.getElementById('listBody');b.innerHTML='';
   const q=searchQ;
   // Filtra por texto de busca
-  let base=q?allV.filter(v=>{
+  const setorBase=veiculosDoSetor();
+  let base=q?setorBase.filter(v=>{
     if(v.frota.toLowerCase().includes(q))return true;
     if(v.motorista.toLowerCase().includes(q))return true;
     const li=linhaMap[v.frota];
     if(li&&li.nomeLinha&&li.nomeLinha.toLowerCase().includes(q))return true;
     return false;
-  }):allV;
+  }):setorBase;
   // Filtra por status (clique no badge)
   if(activeFilter) base=base.filter(v=>getStatus(v)===activeFilter);
   filt=[...base];
@@ -1623,6 +1705,9 @@ async function load(){
   const btn=document.getElementById('btnR');btn.classList.add('sp');
   if(allV.length===0)document.getElementById('ovL').classList.remove('hidden');
   try{
+    // Cadastro diário de veículos/setores deve estar disponível antes de normalizar posições
+    await loadCadastro();
+
     // Inicia API2 sem bloquear — em iOS/Safari HTTP pode ser bloqueado
     const linhasPromise = loadLinhas().catch(()=>{});
 
@@ -1669,7 +1754,7 @@ async function load(){
     });
 
     allV=norm(arr);
-    filt=[...allV];
+    filt=[...veiculosDoSetor()];
 
     // Empurra a posição NOVA de cada veículo no buffer da cauda (após snapshot da anterior acima).
     // Assim, ao chamar refreshTrail() mais abaixo, o buffer já contém [..., anterior, atual].
@@ -1849,7 +1934,7 @@ if('serviceWorker' in navigator){
      com a armazenada e, se for diferente, limpa o cache e recarrega.
      Assim o usuário nunca precisa limpar cache ou desinstalar o app.
   */
-  const APP_VERSION = '1.0.0'; // ← ALTERE A CADA DEPLOY
+  const APP_VERSION = '1.1.0-setores'; // ← ALTERE A CADA DEPLOY
 
   window.addEventListener('load', function(){
     // 1) Registra o SW normalmente
