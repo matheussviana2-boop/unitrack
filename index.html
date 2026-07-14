@@ -56,10 +56,30 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
 .logo-divider{width:1px;height:26px;background:var(--border2);}
 .logo-sub{font-size:10px;font-weight:600;color:var(--text3);letter-spacing:2.5px;text-transform:uppercase;}
 .topbar-center{display:flex;align-items:center;gap:8px;}
-.sector-filter{display:flex;align-items:center;gap:7px;background:rgba(10,181,168,0.08);border:1px solid rgba(10,181,168,0.25);border-radius:10px;padding:5px 8px;min-width:190px;}
-.sector-filter svg{flex-shrink:0;color:var(--teal);}
-.sector-select{width:100%;min-width:0;background:transparent;border:none;outline:none;color:var(--text);font-family:'Exo 2',sans-serif;font-size:11px;font-weight:700;cursor:pointer;}
-.sector-select option{background:var(--navy2);color:var(--text);}
+.sector-filter{
+  height:34px;min-width:194px;max-width:240px;
+  display:flex;align-items:center;gap:7px;
+  position:relative;padding:0 31px 0 10px;
+  background:linear-gradient(180deg,rgba(15,42,58,.94),rgba(8,27,40,.94));
+  border:1px solid rgba(10,181,168,.72);border-radius:17px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.035),0 3px 12px rgba(0,0,0,.2);
+  transition:border-color .18s,box-shadow .18s,background .18s;
+}
+.sector-filter:hover,.sector-filter:focus-within{
+  border-color:var(--teal);background:linear-gradient(180deg,rgba(18,49,66,.98),rgba(9,31,45,.98));
+  box-shadow:0 0 0 2px rgba(10,181,168,.08),0 4px 14px rgba(0,0,0,.25);
+}
+.sector-filter .sector-icon{width:14px;height:14px;flex:0 0 14px;color:#83b8c9;}
+.sector-label{font-size:11px;font-weight:500;color:var(--text3);white-space:nowrap;pointer-events:none;}
+.sector-select{
+  flex:1;min-width:0;height:32px;padding:0;
+  appearance:none;-webkit-appearance:none;
+  background:transparent;border:none;outline:none;
+  color:#e7f4fb;font-family:'Exo 2',sans-serif;font-size:11px;font-weight:800;
+  cursor:pointer;text-overflow:ellipsis;
+}
+.sector-select option{background:#10253a;color:var(--text);font-weight:600;}
+.sector-chevron{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:12px;height:12px;color:#c5dce8;pointer-events:none;}
 .sector-loading{opacity:.65;pointer-events:none;}
 .stat-chip{display:flex;align-items:center;gap:6px;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid;}
 .sc-g{background:rgba(0,212,106,0.1);color:#00d46a;border-color:rgba(0,212,106,0.25);}
@@ -296,13 +316,14 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
     gap:8px;
   }
   /* hambúrguer à esquerda, logo no centro, botões à direita */
-  .logo-wrap{flex:1;justify-content:flex-start;}
-  .topbar-center{display:flex!important;flex:0 1 138px;min-width:0;}
-  .topbar-center #mainBadge{display:none!important;}
-  .sector-filter{min-width:0;width:100%;padding:5px 7px;}
-  .sector-select{font-size:10px;}
-  .sector-filter svg{display:none;}
-  .topbar-right{gap:8px;flex-shrink:0;}
+  .logo-wrap{flex:1;justify-content:flex-start;min-width:0;}
+  .topbar-center{display:none!important;}
+  .topbar-right{gap:6px;flex-shrink:0;}
+  .sector-filter{height:32px;min-width:116px;max-width:142px;padding:0 25px 0 8px;gap:5px;}
+  .sector-filter .sector-icon{display:block;width:13px;height:13px;flex-basis:13px;}
+  .sector-label{display:none;}
+  .sector-select{height:30px;font-size:10px;}
+  .sector-chevron{right:8px;width:10px;height:10px;}
 
   /* clock mobile */
   #clockMobile{
@@ -548,18 +569,23 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
       <div class="logo-divider tb-desktop-only"></div>
       <div class="logo-sub tb-desktop-only">Rastreamento</div>
     </div>
-    <!-- Badge centralizado — igual ao antigo map-badge, funciona em PC e mobile -->
+    <!-- Badge centralizado -->
     <div class="topbar-center">
-      <label class="sector-filter sector-loading" id="sectorFilterWrap" title="Filtrar veículos por setor">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18"/><path d="M6 21V7l6-4 6 4v14"/><path d="M9 10h.01M15 10h.01M9 14h.01M15 14h.01"/></svg>
-        <select id="sectorSelect" class="sector-select" onchange="changeSector(this.value)" aria-label="Selecionar setor">
-          <option value="__loading__">Carregando setores...</option>
-        </select>
-      </label>
       <div id="mainBadge" style="display:flex;align-items:center;gap:12px;background:rgba(9,20,32,0.92);border:1px solid var(--border2);border-radius:12px;padding:7px 14px;box-shadow:0 4px 20px rgba(0,0,0,0.5);backdrop-filter:blur(4px);"></div>
     </div>
     <!-- Direita -->
     <div class="topbar-right">
+      <label class="sector-filter sector-loading" id="sectorFilterWrap" title="Filtrar veículos por setor">
+        <svg class="sector-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M4 7h10M18 7h2M4 12h3M11 12h9M4 17h8M16 17h4"/>
+          <circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/>
+        </svg>
+        <span class="sector-label">Setor:</span>
+        <select id="sectorSelect" class="sector-select" onchange="changeSector(this.value)" aria-label="Selecionar setor">
+          <option value="__loading__">Carregando...</option>
+        </select>
+        <svg class="sector-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </label>
       <div class="cd-pill tb-desktop-only">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
         <span id="cdLbl">1:00</span>
