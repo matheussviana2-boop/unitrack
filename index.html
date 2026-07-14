@@ -69,17 +69,20 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
   border-color:var(--teal);background:linear-gradient(180deg,rgba(18,49,66,.98),rgba(9,31,45,.98));
   box-shadow:0 0 0 2px rgba(10,181,168,.08),0 4px 14px rgba(0,0,0,.25);
 }
-.sector-filter .sector-icon{width:14px;height:14px;flex:0 0 14px;color:#83b8c9;}
-.sector-label{font-size:11px;font-weight:500;color:var(--text3);white-space:nowrap;pointer-events:none;}
+.sector-filter .sector-icon{width:14px;height:14px;flex:0 0 14px;color:#9fd8e4;pointer-events:none;}
+.sector-label{font-size:11px;font-weight:700;color:#b9d4e2;white-space:nowrap;pointer-events:none;}
+.sector-value{
+  min-width:0;max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:#ffffff;font-size:11px;font-weight:800;letter-spacing:.15px;pointer-events:none;
+  text-shadow:0 0 10px rgba(10,181,168,.18);
+}
 .sector-select{
-  flex:1;min-width:0;height:32px;padding:0;
+  position:absolute;inset:0;width:100%;height:100%;z-index:3;
   appearance:none;-webkit-appearance:none;
-  background:transparent;border:none;outline:none;
-  color:#e7f4fb;font-family:'Exo 2',sans-serif;font-size:11px;font-weight:800;
-  cursor:pointer;text-overflow:ellipsis;
+  opacity:0;background:transparent;border:none;outline:none;cursor:pointer;
 }
 .sector-select option{background:#10253a;color:var(--text);font-weight:600;}
-.sector-chevron{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:12px;height:12px;color:#c5dce8;pointer-events:none;}
+.sector-chevron{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:12px;height:12px;color:#e3f3fa;pointer-events:none;z-index:2;}
 .sector-loading{opacity:.65;pointer-events:none;}
 .stat-chip{display:flex;align-items:center;gap:6px;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid;}
 .sc-g{background:rgba(0,212,106,0.1);color:#00d46a;border-color:rgba(0,212,106,0.25);}
@@ -322,7 +325,8 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
   .sector-filter{height:32px;min-width:116px;max-width:142px;padding:0 25px 0 8px;gap:5px;}
   .sector-filter .sector-icon{display:block;width:13px;height:13px;flex-basis:13px;}
   .sector-label{display:none;}
-  .sector-select{height:30px;font-size:10px;}
+  .sector-value{max-width:88px;font-size:10px;}
+  .sector-select{height:100%;}
   .sector-chevron{right:8px;width:10px;height:10px;}
 
   /* clock mobile */
@@ -581,6 +585,7 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
           <circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/>
         </svg>
         <span class="sector-label">Setor:</span>
+        <span class="sector-value" id="sectorValue">Carregando...</span>
         <select id="sectorSelect" class="sector-select" onchange="changeSector(this.value)" aria-label="Selecionar setor">
           <option value="__loading__">Carregando...</option>
         </select>
@@ -1135,11 +1140,20 @@ function preencherFiltroSetores(){
   const salvo=localStorage.getItem(SETOR_STORAGE_KEY)||'todos';
   setorSelecionado=setoresDisponiveis.some(s=>s.id===salvo)?salvo:'todos';
   select.value=setorSelecionado;
+  atualizarTextoSetor();
   wrap.classList.remove('sector-loading');
+}
+function atualizarTextoSetor(){
+  const select=document.getElementById('sectorSelect');
+  const value=document.getElementById('sectorValue');
+  if(!select||!value)return;
+  const opt=select.options[select.selectedIndex];
+  value.textContent=opt?opt.textContent:'Todos os setores';
 }
 function changeSector(value){
   setorSelecionado=value||'todos';
   localStorage.setItem(SETOR_STORAGE_KEY,setorSelecionado);
+  atualizarTextoSetor();
   activeV=null; activeFilter=null; searchQ=''; selIdx=-1;
   document.getElementById('acInput').value='';
   document.getElementById('acClear').classList.remove('show');
