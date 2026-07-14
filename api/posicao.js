@@ -2,77 +2,73 @@ const http = require('http');
 
 /* ── Chaves BrasilSat ativas ──
    Todas usam o MESMO endpoint, mudando apenas a chave.
-   Para somar outra conta/frota no futuro, basta acrescentar a chave abaixo. */
+   Para adicionar outra conta no futuro, é só incluir a chave abaixo. */
 const CHAVES = [
   'VkVkak9WQlJOVFptUVhGSVdHSnVORGt5UWpVeVFuTlJkdz09',
   'WXpKR2ExcHFaek5PYWxaeVl6SkdiblI1WW1ONFlqVXlNelU9'
 ];
 
 const BASE = 'http://aefsistemas.inf.br/brasilsat/api/cenibra/posicao?chave=';
-
-/* campos onde a BrasilSat costuma colocar o array de veículos */
-const CAMPOS = ['posicao','posicoes','veiculos','data','result','results','items','list','frota'];
+const TIMEOUT_MS = 8000;                    // margem antes do limite da Vercel
+const VERSION_TAG = 'multi-key-v2';         // aparece no header p/ diagnóstico
 
 function fetchText(url){
-  return new Promise((resolve,reject)=>{
-    http.get(url, r=>{ let d=''; r.on('data',c=>d+=c); r.on('end',()=>resolve(d)); }).on('error',reject);
+  return new Promise((resolve)=>{
+    let done = false;
+    const finish = (val)=>{ if(!done){ done = true; resolve(val); } };
+    const req = http.get(url, r=>{
+      let d=''; r.on('data',c=>d+=c); r.on('end',()=>finish({ok:true, body:d}));
+    });
+    req.on('error', e => finish({ok:false, error:e.message}));
+    req.setTimeout(TIMEOUT_MS, ()=>{ req.destroy(); finish({ok:false, error:'timeout'}); });
   });
-}
-
-/* Extrai o array de itens de uma resposta.
-   Aceita array puro OU objeto que contém o array sob uma das chaves conhecidas. */
-function extrair(txt){
-  let json;
-  try{ json = JSON.parse(txt); }catch(e){ return { arr:null, campo:null, raw:txt }; }
-  if(Array.isArray(json)) return { arr:json, campo:null };
-  for(const k of CAMPOS){
-    if(Array.isArray(json[k])) return { arr:json[k], campo:k, base:json };
-  }
-  return { arr:null, campo:null, raw:txt, base:json };
 }
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Unitrack-Version', VERSION_TAG);
   if(req.method==='OPTIONS'){ res.status(200).end(); return; }
 
+  const meta = { version: VERSION_TAG, chaves: [] };
+
   try{
-    // busca todas as chaves em paralelo; falha de uma não derruba as outras
-    const respostas = await Promise.all(
-      CHAVES.map(ch => fetchText(BASE + ch).catch(()=>null))
-    );
+    const respostas = await Promise.all(CHAVES.map(ch => fetchText(BASE + ch)));
 
     let merged = [];
-    let outField;          // undefined = ainda indefinido | null = array puro | string = campo
-    let baseObj = null;
-    let rawFallback = null;
+    let baseObj = null;   // reaproveita status/status_massage da 1ª resposta OK
 
-    for(const txt of respostas){
-      if(txt == null) continue;
-      const ex = extrair(txt);
-      if(ex.arr){
-        if(outField === undefined){ outField = ex.campo; baseObj = ex.base || null; }
-        merged = merged.concat(ex.arr);
-      }else if(rawFallback === null){
-        rawFallback = ex.raw;   // resposta não-JSON: guardada como fallback
+    respostas.forEach((r, i) => {
+      const info = { index: i, ok: r.ok };
+      if(!r.ok){ info.erro = r.error; meta.chaves.push(info); return; }
+      try{
+        const json = JSON.parse(r.body);
+        const arr = Array.isArray(json) ? json : (Array.isArray(json.data) ? json.data : null);
+        if(arr){
+          if(!baseObj && !Array.isArray(json)) baseObj = json;
+          merged = merged.concat(arr);
+          info.itens = arr.length;
+        }else{
+          info.erro = 'formato inesperado';
+          info.amostra = r.body.slice(0,120);
+        }
+      }catch(e){
+        info.erro = 'JSON inválido: ' + e.message;
       }
-    }
+      meta.chaves.push(info);
+    });
+
+    meta.total = merged.length;
 
     res.setHeader('Content-Type','application/json');
 
-    // nenhuma resposta virou array -> devolve a 1a crua (comportamento antigo)
-    if(merged.length === 0 && rawFallback !== null){
-      res.status(200).send(rawFallback);
-      return;
-    }
-
-    // reconstrói no mesmo formato da resposta original
-    if(outField){
-      res.status(200).json(Object.assign({}, baseObj, { [outField]: merged }));
+    if(baseObj){
+      const out = Object.assign({}, baseObj, { data: merged, _meta: meta });
+      res.status(200).json(out);
     }else{
-      res.status(200).json(merged); 
+      res.status(200).json({ status:200, data:merged, _meta:meta });
     }
   }catch(e){
-    res.status(502).json({ error: e.message });
+    res.status(502).json({ error: e.message, _meta: meta });
   }
 };
