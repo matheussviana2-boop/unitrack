@@ -1969,69 +1969,78 @@ window.addEventListener('appinstalled',function(){
   _pwaPrompt=null;
 });
 if('serviceWorker' in navigator){
-  /* ══ SISTEMA DE AUTO-UPDATE ══
-     APP_VERSION: incremente a cada deploy. O SW compara essa versão
-     com a armazenada e, se for diferente, limpa o cache e recarrega.
-     Assim o usuário nunca precisa limpar cache ou desinstalar o app.
+  /* ══ ATUALIZAÇÃO AUTOMÁTICA DO PWA ══
+     Esta versão deve acompanhar CACHE_VERSION do sw.js.
+     A preferência de setor fica no localStorage e NÃO é apagada.
   */
-  const APP_VERSION = '1.1.0-setores'; // ← ALTERE A CADA DEPLOY
+  const APP_VERSION = '1.2.0-filtro-setor';
+  let swReloading = false;
+
+  function reloadForNewVersion(){
+    if(swReloading) return;
+    swReloading = true;
+    window.location.reload();
+  }
 
   window.addEventListener('load', function(){
-    // 1) Registra o SW normalmente
-    navigator.serviceWorker.register('/sw.js')
-      .then(function(reg){
-        console.log('[SW] OK:', reg.scope);
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+      .then(function(registration){
+        console.log('[SW] Registrado:', registration.scope);
 
-        // 2) Checa se há update do SW (ex: sw.js mudou no server)
-        reg.addEventListener('updatefound', function(){
-          const newWorker = reg.installing;
-          if(!newWorker) return;
-          newWorker.addEventListener('statechange', function(){
-            // Quando o novo SW está pronto e já existe um antigo controlando
-            if(newWorker.state === 'activated' && navigator.serviceWorker.controller){
-              console.log('[SW] Nova versão detectada — recarregando...');
-              window.location.reload();
-            }
+        // Consulta o sw.js novo imediatamente em toda abertura.
+        registration.update().catch(function(){});
+
+        // Quando um novo SW aparecer, aguarda ele assumir o controle.
+        registration.addEventListener('updatefound', function(){
+          const worker = registration.installing;
+          if(!worker) return;
+
+          worker.addEventListener('statechange', function(){
+            console.log('[SW] Estado da nova versão:', worker.state);
           });
         });
       })
-      .catch(function(e){ console.warn('[SW] Falha:', e); });
+      .catch(function(error){
+        console.warn('[SW] Falha no registro:', error);
+      });
 
-    // 3) Se o SW já existia e tomou controle (ex: skipWaiting() chamado no sw.js)
-    let refreshing = false;
-    navigator.serviceWorker.addEventListener('controllerchange', function(){
-      if(refreshing) return;
-      refreshing = true;
-      console.log('[SW] Controller mudou — recarregando...');
-      window.location.reload();
-    });
+    // skipWaiting() + clients.claim() no sw.js disparam este evento.
+    navigator.serviceWorker.addEventListener('controllerchange', reloadForNewVersion);
 
-    // 4) Verifica se a versão do app mudou (cobre o caso em que sw.js não mudou mas o HTML sim)
-    const storedVersion = localStorage.getItem('app_version');
-    if(storedVersion && storedVersion !== APP_VERSION){
-      console.log('[UniTrack] Versão mudou: '+storedVersion+' → '+APP_VERSION+'. Limpando caches...');
-      // Limpa todos os caches do SW
+    // Garante uma atualização única quando a versão do HTML mudar.
+    const storedVersion = localStorage.getItem('unitrack_app_version');
+    if(storedVersion !== APP_VERSION){
+      localStorage.setItem('unitrack_app_version', APP_VERSION);
+
+      // Limpa somente caches do UniTrack. Não apaga localStorage.
       if('caches' in window){
-        caches.keys().then(function(names){
-          return Promise.all(names.map(function(name){ return caches.delete(name); }));
-        }).then(function(){
-          console.log('[UniTrack] Caches limpos. Recarregando...');
-          localStorage.setItem('app_version', APP_VERSION);
-          window.location.reload();
-        });
-      } else {
-        localStorage.setItem('app_version', APP_VERSION);
-        window.location.reload();
+        caches.keys()
+          .then(function(names){
+            return Promise.all(
+              names
+                .filter(function(name){ return name.indexOf('unitrack-') === 0; })
+                .map(function(name){ return caches.delete(name); })
+            );
+          })
+          .then(function(){
+            return navigator.serviceWorker.getRegistration();
+          })
+          .then(function(registration){
+            if(registration) return registration.update();
+          })
+          .catch(function(error){
+            console.warn('[UniTrack] Não foi possível limpar/atualizar cache:', error);
+          });
       }
-    } else {
-      localStorage.setItem('app_version', APP_VERSION);
     }
 
-    // 5) Força checagem periódica de update do SW (a cada 30 min)
+    // Revalida o Service Worker a cada 30 minutos enquanto o app estiver aberto.
     setInterval(function(){
-      navigator.serviceWorker.getRegistration().then(function(reg){
-        if(reg) reg.update();
-      });
+      navigator.serviceWorker.getRegistration()
+        .then(function(registration){
+          if(registration) return registration.update();
+        })
+        .catch(function(){});
     }, 30 * 60 * 1000);
   });
 }

@@ -1,15 +1,11 @@
 /* ══════════════════════════════════════════════════════
    UniTrack — Service Worker
-   
-   COMO USAR: a cada deploy, incremente CACHE_VERSION.
-   Isso garante que o SW antigo seja descartado,
-   os caches limpos e o app recarregue automaticamente.
+   Atualização automática sem apagar o setor salvo no localStorage.
 ══════════════════════════════════════════════════════ */
 
-const CACHE_VERSION = 'v1.0.0'; // ← ALTERE A CADA DEPLOY (manter igual ao APP_VERSION do index.html)
+const CACHE_VERSION = '1.2.0-filtro-setor';
 const CACHE_NAME = 'unitrack-' + CACHE_VERSION;
 
-// Arquivos essenciais para funcionar offline (opcional — adicione o que quiser cachear)
 const PRECACHE_URLS = [
   '/',
   '/index.html',
@@ -17,81 +13,117 @@ const PRECACHE_URLS = [
   '/icons/icon-512x512.png'
 ];
 
-/* ── INSTALL ── 
-   Chamado quando o browser detecta que sw.js mudou (byte a byte).
-   skipWaiting() força o novo SW a ativar IMEDIATAMENTE, sem esperar
-   o usuário fechar todas as abas. */
+/* Instala a nova versão e a ativa sem esperar todas as abas fecharem. */
 self.addEventListener('install', function(event){
-  console.log('[SW] Install — cache:', CACHE_NAME);
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(function(cache){
-        return cache.addAll(PRECACHE_URLS);
+        // Um recurso ausente não impede todo o Service Worker de instalar.
+        return Promise.all(
+          PRECACHE_URLS.map(function(url){
+            return cache.add(url).catch(function(error){
+              console.warn('[SW] Não foi possível pré-cachear:', url, error);
+            });
+          })
+        );
       })
       .then(function(){
-        // ESSENCIAL: força ativação imediata do novo SW
         return self.skipWaiting();
       })
   );
 });
 
-/* ── ACTIVATE ──
-   Chamado quando o novo SW assume o controle.
-   Apaga todos os caches antigos (versões anteriores). */
+/* Remove somente caches antigos do UniTrack e controla as telas abertas. */
 self.addEventListener('activate', function(event){
-  console.log('[SW] Activate — limpando caches antigos...');
   event.waitUntil(
-    caches.keys().then(function(cacheNames){
-      return Promise.all(
-        cacheNames
-          .filter(function(name){ return name !== CACHE_NAME; })
-          .map(function(name){
-            console.log('[SW] Deletando cache antigo:', name);
-            return caches.delete(name);
-          })
-      );
-    }).then(function(){
-      // ESSENCIAL: faz o novo SW controlar as abas abertas imediatamente
-      return self.clients.claim();
-    })
+    caches.keys()
+      .then(function(cacheNames){
+        return Promise.all(
+          cacheNames
+            .filter(function(name){
+              return name.indexOf('unitrack-') === 0 && name !== CACHE_NAME;
+            })
+            .map(function(name){
+              return caches.delete(name);
+            })
+        );
+      })
+      .then(function(){
+        return self.clients.claim();
+      })
   );
 });
 
-/* ── FETCH ──
-   Estratégia: Network First, fallback para cache.
-   - Sempre tenta buscar a versão mais nova do servidor primeiro.
-   - Se a rede falhar (offline), serve do cache.
-   - Requisições de API (posicao, viagens, etc.) NUNCA são cacheadas
-     (são dados em tempo real). */
-self.addEventListener('fetch', function(event){
-  const url = new URL(event.request.url);
+/* Permite solicitar ativação imediata manualmente, se necessário. */
+self.addEventListener('message', function(event){
+  if(event.data && event.data.type === 'SKIP_WAITING'){
+    self.skipWaiting();
+  }
+});
 
-  // Nunca cacheia chamadas de API / dados em tempo real
-  if(url.hostname.includes('run.app') || 
-     url.hostname.includes('aefsistemas') ||
-     url.hostname.includes('easycourse') ||
-     url.hostname.includes('firestore') ||
-     url.hostname.includes('googleapis') ||
-     url.pathname.startsWith('/api')){
-    return; // deixa o fetch normal acontecer (sem interceptar)
+/* Network First:
+   - páginas e arquivos buscam a versão nova primeiro;
+   - offline usa o cache;
+   - APIs nunca são interceptadas nem armazenadas. */
+self.addEventListener('fetch', function(event){
+  const request = event.request;
+
+  if(request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+
+  if(
+    url.pathname.startsWith('/api/') ||
+    url.hostname.includes('aefsistemas') ||
+    url.hostname.includes('run.app') ||
+    url.hostname.includes('easycourse') ||
+    url.hostname.includes('firestore') ||
+    url.hostname.includes('googleapis')
+  ){
+    return;
   }
 
-  // Para tudo mais: network first, cache fallback
+  // Navegação sempre tenta obter o HTML mais recente sem cache HTTP.
+  if(request.mode === 'navigate'){
+    event.respondWith(
+      fetch(request, { cache: 'no-store' })
+        .then(function(response){
+          if(response && response.ok){
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(function(cache){
+              cache.put('/index.html', copy);
+            });
+          }
+          return response;
+        })
+        .catch(function(){
+          return caches.match('/index.html')
+            .then(function(cached){
+              return cached || caches.match('/');
+            });
+        })
+    );
+    return;
+  }
+
   event.respondWith(
-    fetch(event.request)
+    fetch(request)
       .then(function(response){
-        // Se a resposta for válida, atualiza o cache
-        if(response && response.status === 200 && response.type === 'basic'){
-          const responseClone = response.clone();
+        if(
+          response &&
+          response.status === 200 &&
+          response.type === 'basic' &&
+          url.origin === self.location.origin
+        ){
+          const copy = response.clone();
           caches.open(CACHE_NAME).then(function(cache){
-            cache.put(event.request, responseClone);
+            cache.put(request, copy);
           });
         }
         return response;
       })
       .catch(function(){
-        // Offline: tenta servir do cache
-        return caches.match(event.request);
+        return caches.match(request);
       })
   );
 });
