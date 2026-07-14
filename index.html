@@ -83,6 +83,46 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
 }
 .sector-select option{background:#10253a;color:var(--text);font-weight:600;}
 .sector-chevron{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:12px;height:12px;color:#e3f3fa;pointer-events:none;z-index:2;}
+
+.sector-mobile-menu{
+  display:none;
+  position:absolute;
+  top:calc(100% + 5px);
+  right:0;
+  width:max-content;
+  min-width:100%;
+  max-width:220px;
+  background:#10253a;
+  border:1px solid rgba(10,181,168,.55);
+  border-radius:8px;
+  box-shadow:0 10px 28px rgba(0,0,0,.48);
+  overflow:hidden;
+  z-index:10020;
+}
+.sector-mobile-menu.open{display:block;}
+.sector-mobile-option{
+  display:block;
+  width:100%;
+  border:0;
+  border-bottom:1px solid rgba(255,255,255,.055);
+  background:#10253a;
+  color:#e7f4fb;
+  text-align:left;
+  padding:8px 10px;
+  font-family:'Exo 2',sans-serif;
+  font-size:11px;
+  font-weight:700;
+  line-height:1.2;
+  white-space:nowrap;
+  cursor:pointer;
+}
+.sector-mobile-option:last-child{border-bottom:0;}
+.sector-mobile-option:hover,
+.sector-mobile-option.active{
+  background:#146ed0;
+  color:#fff;
+}
+
 .sector-loading{opacity:.65;pointer-events:none;}
 .stat-chip{display:flex;align-items:center;gap:6px;padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid;}
 .sc-g{background:rgba(0,212,106,0.1);color:#00d46a;border-color:rgba(0,212,106,0.25);}
@@ -326,7 +366,19 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
   .sector-filter .sector-icon{display:block;width:13px;height:13px;flex-basis:13px;}
   .sector-label{display:none;}
   .sector-value{max-width:88px;font-size:10px;}
-  .sector-select{height:100%;}
+  .sector-select{display:none!important;}
+  .sector-filter{cursor:pointer;overflow:visible;}
+  .sector-mobile-menu{
+    top:calc(100% + 4px);
+    right:0;
+    min-width:142px;
+    max-width:190px;
+    border-radius:5px;
+  }
+  .sector-mobile-option{
+    padding:7px 8px;
+    font-size:10px;
+  }
   .sector-chevron{right:8px;width:10px;height:10px;}
 
   /* clock mobile */
@@ -579,7 +631,7 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
     </div>
     <!-- Direita -->
     <div class="topbar-right">
-      <label class="sector-filter sector-loading" id="sectorFilterWrap" title="Filtrar veículos por setor">
+      <label class="sector-filter sector-loading" id="sectorFilterWrap" title="Filtrar veículos por setor" onclick="toggleSectorMobileMenu(event)">
         <svg class="sector-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
           <path d="M4 7h10M18 7h2M4 12h3M11 12h9M4 17h8M16 17h4"/>
           <circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="14" cy="17" r="2"/>
@@ -589,6 +641,7 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
         <select id="sectorSelect" class="sector-select" onchange="changeSector(this.value)" aria-label="Selecionar setor">
           <option value="__loading__">Carregando...</option>
         </select>
+        <div class="sector-mobile-menu" id="sectorMobileMenu" onclick="event.stopPropagation()"></div>
         <svg class="sector-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
       </label>
       <div class="cd-pill tb-desktop-only">
@@ -1125,6 +1178,51 @@ function normalizaChave(value){
 function veiculosDoSetor(){
   return setorSelecionado==='todos'?allV:allV.filter(v=>v.setorId===setorSelecionado);
 }
+
+function isMobileSectorUi(){
+  return window.matchMedia && window.matchMedia('(max-width:700px)').matches;
+}
+function fecharSectorMobileMenu(){
+  const menu=document.getElementById('sectorMobileMenu');
+  if(menu)menu.classList.remove('open');
+}
+function toggleSectorMobileMenu(event){
+  if(!isMobileSectorUi())return;
+  if(event)event.preventDefault();
+  const wrap=document.getElementById('sectorFilterWrap');
+  const menu=document.getElementById('sectorMobileMenu');
+  if(!wrap||!menu||wrap.classList.contains('sector-loading'))return;
+  menu.classList.toggle('open');
+}
+function montarSectorMobileMenu(){
+  const select=document.getElementById('sectorSelect');
+  const menu=document.getElementById('sectorMobileMenu');
+  if(!select||!menu)return;
+  menu.innerHTML='';
+  Array.from(select.options).forEach(function(opt){
+    if(opt.value==='__loading__')return;
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='sector-mobile-option'+(opt.value===setorSelecionado?' active':'');
+    btn.textContent=opt.textContent;
+    btn.onclick=function(e){
+      e.preventDefault();
+      e.stopPropagation();
+      select.value=opt.value;
+      changeSector(opt.value);
+      fecharSectorMobileMenu();
+    };
+    menu.appendChild(btn);
+  });
+}
+document.addEventListener('click',function(event){
+  const wrap=document.getElementById('sectorFilterWrap');
+  if(wrap&&!wrap.contains(event.target))fecharSectorMobileMenu();
+});
+window.addEventListener('resize',function(){
+  if(!isMobileSectorUi())fecharSectorMobileMenu();
+});
+
 function preencherFiltroSetores(){
   const select=document.getElementById('sectorSelect');
   const wrap=document.getElementById('sectorFilterWrap');
@@ -1141,6 +1239,7 @@ function preencherFiltroSetores(){
   setorSelecionado=setoresDisponiveis.some(s=>s.id===salvo)?salvo:'todos';
   select.value=setorSelecionado;
   atualizarTextoSetor();
+  montarSectorMobileMenu();
   wrap.classList.remove('sector-loading');
 }
 function atualizarTextoSetor(){
@@ -1154,6 +1253,7 @@ function changeSector(value){
   setorSelecionado=value||'todos';
   localStorage.setItem(SETOR_STORAGE_KEY,setorSelecionado);
   atualizarTextoSetor();
+  montarSectorMobileMenu();
   activeV=null; activeFilter=null; searchQ=''; selIdx=-1;
   document.getElementById('acInput').value='';
   document.getElementById('acClear').classList.remove('show');
