@@ -70,7 +70,7 @@ module.exports = async (req, res) => {
     if(outField){
       res.status(200).json(Object.assign({}, baseObj, { [outField]: merged }));
     }else{
-      res.status(200).json(merged);
+      res.status(200).json(merged); 
     }
   }catch(e){
     res.status(502).json({ error: e.message });
