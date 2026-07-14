@@ -1,23 +1,44 @@
 {
   "version": 2,
   "routes": [
-    { "src": "/api/posicao", "dest": "/api/posicao.js" },
-    { "src": "/api/viagens", "dest": "/api/viagens.js" },
+    {
+      "src": "/api/posicao",
+      "dest": "/api/posicao.js"
+    },
+    {
+      "src": "/api/viagens",
+      "dest": "/api/viagens.js"
+    },
+    {
+      "src": "/api/cadastro",
+      "dest": "/api/cadastro.js"
+    },
     {
       "src": "/sw.js",
-      "headers": { "Cache-Control": "no-cache, no-store, must-revalidate", "Service-Worker-Allowed": "/" },
+      "headers": {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Service-Worker-Allowed": "/"
+      },
       "dest": "/sw.js"
     },
     {
       "src": "/manifest.json",
-      "headers": { "Content-Type": "application/manifest+json", "Cache-Control": "no-cache, no-store, must-revalidate" },
+      "headers": {
+        "Content-Type": "application/manifest+json",
+        "Cache-Control": "no-cache, no-store, must-revalidate"
+      },
       "dest": "/manifest.json"
     },
     {
       "src": "/icons/(.*)",
-      "headers": { "Cache-Control": "no-cache, no-store, must-revalidate" },
+      "headers": {
+        "Cache-Control": "no-cache, no-store, must-revalidate"
+      },
       "dest": "/icons/$1"
     },
-    { "src": "/(.*)", "dest": "/index.html" }
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
   ]
 }
