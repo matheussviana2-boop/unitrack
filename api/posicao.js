@@ -8,7 +8,7 @@ const CHAVES = [
 
 const BASE = 'http://aefsistemas.inf.br/brasilsat/api/cenibra/posicao?chave=';
 const TIMEOUT_MS = 12000;
-const VERSION_TAG = 'multi-key-v3';
+const VERSION_TAG = 'multi-key-v4-setores';
 const MAX_REDIRECTS = 4;
 
 function requestText(url, redirects = 0) {
@@ -114,7 +114,7 @@ module.exports = async (req, res) => {
         } else {
           if (!baseObj && !Array.isArray(json)) baseObj = json;
           arr.forEach((item) => {
-            if (item && typeof item === 'object') merged.push({ ...item, _sourceKey: index });
+            if (item && typeof item === 'object') merged.push({ ...item, _sourceKey: index, _contaId: `conta_${index + 1}` });
           });
           info.itens = arr.length;
         }
