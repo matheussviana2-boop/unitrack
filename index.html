@@ -564,6 +564,18 @@ html,body{height:100%;font-family:'Exo 2',sans-serif;background:var(--navy);colo
 /* z-index do botão Todos os veículos — acima do info-card no mobile */
 .btn-clear-sel{ z-index:1002!important; }
 
+
+@media(max-width:700px){
+  body.sector-menu-open #mainBadge,
+  body.sector-menu-open #mobileBadge,
+  body.sector-menu-open .topbar-center{
+    opacity:0!important;
+    visibility:hidden!important;
+    pointer-events:none!important;
+    transition:opacity .12s ease, visibility .12s ease;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -1185,6 +1197,7 @@ function isMobileSectorUi(){
 function fecharSectorMobileMenu(){
   const menu=document.getElementById('sectorMobileMenu');
   if(menu)menu.classList.remove('open');
+  document.body.classList.remove('sector-menu-open');
 }
 function toggleSectorMobileMenu(event){
   if(!isMobileSectorUi())return;
@@ -1192,7 +1205,10 @@ function toggleSectorMobileMenu(event){
   const wrap=document.getElementById('sectorFilterWrap');
   const menu=document.getElementById('sectorMobileMenu');
   if(!wrap||!menu||wrap.classList.contains('sector-loading'))return;
-  menu.classList.toggle('open');
+
+  const willOpen=!menu.classList.contains('open');
+  menu.classList.toggle('open',willOpen);
+  document.body.classList.toggle('sector-menu-open',willOpen);
 }
 function montarSectorMobileMenu(){
   const select=document.getElementById('sectorSelect');
